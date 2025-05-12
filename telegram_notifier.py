@@ -1,6 +1,7 @@
 import requests
 import config
 import logging
+import pandas as pd
 
 class TelegramNotifier:
     def __init__(self, token=None, chat_id=None):
@@ -194,22 +195,72 @@ class TelegramNotifier:
             )
         else:
             # Detailed message with all indicators
-            message = (
-                f"{emoji} <b>SIGNAL DETECTED: {signal}</b> {emoji}\n\n"
-                f"Symbol: {config.SYMBOL}\n"
-                f"RSI: {indicators['rsi']:.2f}\n"
-                f"Candle: {'Green' if indicators['is_green'] else 'Red' if indicators['is_red'] else 'Neutral'}\n"
-                f"EMA {config.EMA_SHORT_PERIOD}: {indicators[f'ema_{config.EMA_SHORT_PERIOD}']:.2f}\n"
-                f"EMA {config.EMA_LONG_PERIOD}: {indicators[f'ema_{config.EMA_LONG_PERIOD}']:.2f}\n"
-                f"BB Upper: {indicators['bb_upper']:.2f}\n"
-                f"BB Middle: {indicators['bb_middle']:.2f}\n"
-                f"BB Lower: {indicators['bb_lower']:.2f}\n"
-                f"BB %B: {indicators['bb_percent_b']:.2f}\n"
-                f"MACD Line: {indicators['macd_line']:.4f}\n"
-                f"MACD Signal: {indicators['macd_signal']:.4f}\n"
-                f"MACD Histogram: {indicators['macd_histogram']:.4f}\n\n"
-                f"Signal Strength: {indicators['signal_strength']}/5"
-            )
+            message_parts = [
+                f"{emoji} <b>SIGNAL DETECTED: {signal}</b> {emoji}\n\n",
+                f"Symbol: {config.SYMBOL}\n",
+
+                # Traditional indicators
+                f"<b>Traditional Indicators:</b>\n",
+                f"RSI: {indicators['rsi']:.2f}\n",
+                f"Candle: {'Green' if indicators['is_green'] else 'Red' if indicators['is_red'] else 'Neutral'}\n",
+                f"EMA {config.EMA_SHORT_PERIOD}: {indicators[f'ema_{config.EMA_SHORT_PERIOD}']:.2f}\n",
+                f"EMA {config.EMA_LONG_PERIOD}: {indicators[f'ema_{config.EMA_LONG_PERIOD}']:.2f}\n",
+                f"BB Upper: {indicators['bb_upper']:.2f}\n",
+                f"BB Middle: {indicators['bb_middle']:.2f}\n",
+                f"BB Lower: {indicators['bb_lower']:.2f}\n",
+                f"BB %B: {indicators['bb_percent_b']:.2f}\n",
+                f"MACD Line: {indicators['macd_line']:.4f}\n",
+                f"MACD Signal: {indicators['macd_signal']:.4f}\n",
+                f"MACD Histogram: {indicators['macd_histogram']:.4f}\n"
+            ]
+
+            # Add SMC indicators if available
+            if 'market_structure' in indicators:
+                message_parts.extend([
+                    f"\n<b>Smart Money Concept (SMC):</b>\n",
+                    f"Market Structure: {indicators['market_structure']}\n",
+                    f"Break of Structure: {'Bullish' if indicators.get('bos_bullish', False) else 'Bearish' if indicators.get('bos_bearish', False) else 'None'}\n",
+                ])
+
+                # Add FVG information
+                has_bullish_fvg = 'nearest_bullish_fvg' in indicators and not pd.isna(indicators['nearest_bullish_fvg'])
+                has_bearish_fvg = 'nearest_bearish_fvg' in indicators and not pd.isna(indicators['nearest_bearish_fvg'])
+
+                # Add FVG status
+                if has_bullish_fvg and has_bearish_fvg:
+                    message_parts.append(f"Fair Value Gaps: Both Bullish and Bearish\n")
+                elif has_bullish_fvg:
+                    message_parts.append(f"Fair Value Gaps: Bullish\n")
+                elif has_bearish_fvg:
+                    message_parts.append(f"Fair Value Gaps: Bearish\n")
+                else:
+                    message_parts.append(f"Fair Value Gaps: None\n")
+
+                # Add details for bullish FVG if present
+                if has_bullish_fvg:
+                    bullish_idx = indicators['nearest_bullish_fvg']
+                    if isinstance(bullish_idx, (int, float, str)) and str(bullish_idx) in indicators:
+                        fvg_top = indicators.get(f"{bullish_idx}_fvg_top", "N/A")
+                        fvg_bottom = indicators.get(f"{bullish_idx}_fvg_bottom", "N/A")
+                        message_parts.append(f"Bullish FVG: Top {fvg_top}, Bottom {fvg_bottom}\n")
+                    else:
+                        message_parts.append(f"Bullish FVG: Present\n")
+
+                # Add details for bearish FVG if present
+                if has_bearish_fvg:
+                    bearish_idx = indicators['nearest_bearish_fvg']
+                    if isinstance(bearish_idx, (int, float, str)) and str(bearish_idx) in indicators:
+                        fvg_top = indicators.get(f"{bearish_idx}_fvg_top", "N/A")
+                        fvg_bottom = indicators.get(f"{bearish_idx}_fvg_bottom", "N/A")
+                        message_parts.append(f"Bearish FVG: Top {fvg_top}, Bottom {fvg_bottom}\n")
+                    else:
+                        message_parts.append(f"Bearish FVG: Present\n")
+
+            # Add signal strength
+            message_parts.append(f"\nSignal Strength: {indicators['signal_strength']}/5")
+
+            # Combine all parts
+            message = "".join(message_parts)
 
         return self.send_message(message)
 

@@ -3,12 +3,16 @@ import logging
 import threading
 import traceback
 from datetime import datetime
+import pandas as pd
 
 import config
 from binance_client import BinanceClient
 from indicators import (
     calculate_rsi, detect_candle_pattern, calculate_ema,
     calculate_bollinger_bands, calculate_macd, check_entry_signal
+)
+from smc_indicators import (
+    detect_market_structure, detect_fair_value_gaps
 )
 from position_manager import PositionManager
 from telegram_notifier import TelegramNotifier
@@ -140,38 +144,97 @@ class TradingBot:
             # Send a message that trading is resumed for the new day
             self.telegram.send_message("🔄 <b>NEW DAY</b> - Trading resumed with fresh PnL tracking")
 
-            # Send initial PnL report for the day
-            pnl_summary = self.client.get_daily_pnl(self.start_of_day)
-            self.telegram.notify_daily_pnl(pnl_summary)
+            # Send initial PnL report for the new day if configured to do so
+            if config.SEND_INITIAL_PNL_REPORT:
+                try:
+                    pnl_summary = self.client.get_daily_pnl(self.start_of_day)
+                    self.telegram.notify_daily_pnl(pnl_summary)
+                except Exception as e:
+                    logger.error(f"Error getting initial PnL for new day: {str(e)}")
+
+            # Reset PnL check time
+            self.daily_pnl_last_check = int(time.time())
 
     def check_and_enter_position(self):
         """
         Check for entry signals and enter positions if conditions are met
         """
         try:
-            # Get market data
-            df = self.client.get_klines(self.symbol)
+            # Get market data with enhanced error handling
+            try:
+                df = self.client.get_klines(self.symbol)
 
-            # Calculate indicators
-            df = calculate_rsi(df)
-            df = detect_candle_pattern(df)
-            df = calculate_ema(df)
-            df = calculate_bollinger_bands(df)
-            df = calculate_macd(df)
+                # Check if we got valid data
+                if df.empty or len(df) < config.KLINE_LIMIT * 0.5:  # If we got less than half the requested candles
+                    logger.warning(f"Received incomplete klines data for {self.symbol}. Got {len(df)} candles, expected {config.KLINE_LIMIT}.")
+                    # If we have too few candles, skip this cycle
+                    if len(df) < 30:  # Need at least 30 candles for reliable indicators
+                        logger.error(f"Insufficient data for {self.symbol}. Skipping this cycle.")
+                        return
 
-            # Check for entry signal
-            signal = check_entry_signal(df)
+            except Exception as e:
+                logger.error(f"Failed to get klines data for {self.symbol}: {str(e)}")
+                # Notify about the error but don't raise, so the bot can continue running
+                self.telegram.notify_error(f"Failed to get market data for {self.symbol}: {str(e)}\nBot will retry on next cycle.")
+                return
+
+            # Calculate traditional indicators
+            try:
+                df = calculate_rsi(df)
+                df = detect_candle_pattern(df)
+                df = calculate_ema(df)
+                df = calculate_bollinger_bands(df)
+                df = calculate_macd(df)
+
+                # Calculate Smart Money Concept (SMC) indicators
+                df = detect_market_structure(df)
+                df = detect_fair_value_gaps(df)
+            except Exception as e:
+                logger.error(f"Error calculating indicators for {self.symbol}: {str(e)}")
+                self.telegram.notify_error(f"Error calculating indicators for {self.symbol}: {str(e)}")
+                return
+
+            # Check for entry signal with SMC indicators
+            try:
+                signal = check_entry_signal(df, use_smc=True)
+            except Exception as e:
+                logger.error(f"Error checking entry signal for {self.symbol}: {str(e)}")
+                self.telegram.notify_error(f"Error checking entry signal for {self.symbol}: {str(e)}")
+                return
 
             # Log the current state
             latest = df.iloc[-1]
-            logger.info(
+
+            # Basic indicators log
+            basic_log = (
                 f"Symbol: {self.symbol}, RSI: {latest['rsi']:.2f}, "
                 f"Candle: {'Green' if latest['is_green'] else 'Red' if latest['is_red'] else 'Neutral'}, "
                 f"EMA: {latest[f'ema_{config.EMA_SHORT_PERIOD}']:.2f}/{latest[f'ema_{config.EMA_LONG_PERIOD}']:.2f}, "
                 f"BB: {latest['bb_percent_b']:.2f}, "
-                f"MACD: {latest['macd_line']:.4f}/{latest['macd_signal']:.4f}, "
-                f"Signal: {signal or 'WAIT'}"
+                f"MACD: {latest['macd_line']:.4f}/{latest['macd_signal']:.4f}"
             )
+
+            # SMC indicators log
+            # Check for nearest FVGs
+            has_bullish_fvg = not pd.isna(latest.get('nearest_bullish_fvg', pd.NA))
+            has_bearish_fvg = not pd.isna(latest.get('nearest_bearish_fvg', pd.NA))
+
+            fvg_status = "None"
+            if has_bullish_fvg and has_bearish_fvg:
+                fvg_status = "Both"
+            elif has_bullish_fvg:
+                fvg_status = "Bullish"
+            elif has_bearish_fvg:
+                fvg_status = "Bearish"
+
+            smc_log = (
+                f"Market Structure: {latest['market_structure']}, "
+                f"BOS: {'Bullish' if latest['bos_bullish'] else 'Bearish' if latest['bos_bearish'] else 'None'}, "
+                f"FVG: {fvg_status}"
+            )
+
+            # Log everything
+            logger.info(f"{basic_log}, {smc_log}, Signal: {signal or 'WAIT'}")
 
             # Check if we should hedge an existing position
             should_hedge, hedge_side, pnl_info = self.position_manager.should_hedge_position(self.symbol)
@@ -266,73 +329,99 @@ class TradingBot:
             # Determine order side based on position side
             order_side = 'BUY' if signal == 'LONG' else 'SELL'
 
-            # Place market order
-            order = self.client.place_market_order(
-                side=order_side,
-                quantity=quantity,
-                position_side=signal,
-                symbol=self.symbol
-            )
-
-            logger.info(f"Placed {signal} order: {order}")
+            # Place market order with error handling
+            try:
+                order = self.client.place_market_order(
+                    side=order_side,
+                    quantity=quantity,
+                    position_side=signal,
+                    symbol=self.symbol
+                )
+                logger.info(f"Placed {signal} order: {order}")
+            except Exception as e:
+                error_msg = f"Failed to place {signal} market order: {str(e)}"
+                logger.error(error_msg)
+                self.telegram.notify_error(error_msg)
+                return  # Don't continue if market order fails
 
             # Calculate TP and SL prices
             tp_price = self.position_manager.calculate_take_profit_price(current_price, signal)
             sl_price = self.position_manager.calculate_stop_loss_price(current_price, signal)
 
-            # Place take profit order
+            # Place take profit order with error handling
             tp_side = 'SELL' if signal == 'LONG' else 'BUY'
-            tp_order = self.client.place_take_profit_order(
-                side=tp_side,
-                quantity=quantity,
-                stop_price=tp_price,
-                position_side=signal,
-                symbol=self.symbol
-            )
+            try:
+                tp_order = self.client.place_take_profit_order(
+                    side=tp_side,
+                    quantity=quantity,
+                    stop_price=tp_price,
+                    position_side=signal,
+                    symbol=self.symbol
+                )
+                logger.info(f"Placed take profit order: {tp_order}")
+            except Exception as e:
+                error_msg = f"Failed to place take profit order: {str(e)}"
+                logger.error(error_msg)
+                self.telegram.notify_error(error_msg)
+                # Continue to place SL order even if TP order fails
 
-            logger.info(f"Placed take profit order: {tp_order}")
-
-            # Place stop loss order
+            # Place stop loss order with error handling
             sl_side = 'SELL' if signal == 'LONG' else 'BUY'
-            sl_order = self.client.place_stop_loss_order(
-                side=sl_side,
-                quantity=quantity,
-                stop_price=sl_price,
-                position_side=signal,
-                symbol=self.symbol
-            )
+            try:
+                sl_order = self.client.place_stop_loss_order(
+                    side=sl_side,
+                    quantity=quantity,
+                    stop_price=sl_price,
+                    position_side=signal,
+                    symbol=self.symbol
+                )
+                logger.info(f"Placed stop loss order: {sl_order}")
+            except Exception as e:
+                error_msg = f"Failed to place stop loss order: {str(e)}"
+                logger.error(error_msg)
+                self.telegram.notify_error(error_msg)
+                # Continue even if SL order fails, as we already have a position
 
-            logger.info(f"Placed stop loss order: {sl_order}")
+            # Get account information for notification with error handling
+            try:
+                account_info = self.client.get_account_info()
+                total_balance = float(account_info['totalWalletBalance'])
+                position_value = current_price * quantity
 
-            # Get account information for notification
-            account_info = self.client.get_account_info()
-            total_balance = float(account_info['totalWalletBalance'])
-            position_value = current_price * quantity
+                # Get account usage information
+                account_usage = self.position_manager.get_account_usage_percentage()
 
-            # Get account usage information
-            account_usage = self.position_manager.get_account_usage_percentage()
-
-            # Send notification with account balance and position information
-            self.telegram.notify_entry(
-                position_side=signal,
-                entry_price=current_price,
-                quantity=quantity,
-                tp_price=tp_price,
-                sl_price=sl_price,
-                account_balance=total_balance,
-                position_value=position_value,
-                leverage=self.leverage,
-                account_usage=account_usage,
-                is_hedge=should_hedge
-            )
+                # Send notification with account balance and position information
+                self.telegram.notify_entry(
+                    position_side=signal,
+                    entry_price=current_price,
+                    quantity=quantity,
+                    tp_price=tp_price,
+                    sl_price=sl_price,
+                    account_balance=total_balance,
+                    position_value=position_value,
+                    leverage=self.leverage,
+                    account_usage=account_usage,
+                    is_hedge=should_hedge
+                )
+            except Exception as e:
+                error_msg = f"Error getting account info or sending notification: {str(e)}"
+                logger.error(error_msg)
+                # Don't send notification about this error since we're already having notification issues
+                # Just log it and continue
 
             # If this was a hedge position, update the combined PnL
             if should_hedge:
-                # Get updated PnL information
-                updated_pnl = self.client.get_combined_position_pnl(self.symbol)
+                try:
+                    # Get updated PnL information
+                    updated_pnl = self.client.get_combined_position_pnl(self.symbol)
 
-                # Notify about the combined position
-                self.telegram.notify_hedge_complete(updated_pnl)
+                    # Notify about the combined position
+                    self.telegram.notify_hedge_complete(updated_pnl)
+                except Exception as e:
+                    error_msg = f"Error getting combined PnL for hedge position: {str(e)}"
+                    logger.error(error_msg)
+                    # Don't send notification about this error since we're already having notification issues
 
         except Exception as e:
             error_msg = f"Error in check_and_enter_position: {str(e)}\n{traceback.format_exc()}"
@@ -378,13 +467,16 @@ class TradingBot:
         logger.info(f"Starting trading bot for {self.symbol}")
         self.telegram.send_message(f"🤖 Trading bot started for {self.symbol}")
 
-        # Send initial PnL report
-        try:
-            pnl_summary = self.client.get_daily_pnl(self.start_of_day)
-            self.telegram.notify_daily_pnl(pnl_summary)
-            self.daily_pnl_last_check = int(time.time())
-        except Exception as e:
-            logger.error(f"Error getting initial PnL: {str(e)}")
+        # Send initial PnL report if configured to do so
+        if config.SEND_INITIAL_PNL_REPORT:
+            try:
+                pnl_summary = self.client.get_daily_pnl(self.start_of_day)
+                self.telegram.notify_daily_pnl(pnl_summary)
+            except Exception as e:
+                logger.error(f"Error getting initial PnL: {str(e)}")
+
+        # Initialize the daily PnL check time
+        self.daily_pnl_last_check = int(time.time())
 
         while self.is_running:
             try:

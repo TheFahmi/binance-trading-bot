@@ -1,0 +1,85 @@
+/* Custom styles for the chart page */
+
+#tradingview-chart-container {
+    width: 100%;
+    height: 600px;
+    position: relative;
+}
+
+.position-marker {
+    position: absolute;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    z-index: 1000;
+}
+
+.position-marker.long {
+    background-color: #198754;
+    border: 1px solid #fff;
+}
+
+.position-marker.short {
+    background-color: #dc3545;
+    border: 1px solid #fff;
+}
+
+.position-tooltip {
+    position: absolute;
+    background-color: rgba(0, 0, 0, 0.8);
+    color: #fff;
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    z-index: 1001;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.signal-marker {
+    position: absolute;
+    width: 0;
+    height: 0;
+    z-index: 999;
+}
+
+.signal-marker.long {
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-bottom: 12px solid #198754;
+}
+
+.signal-marker.short {
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-top: 12px solid #dc3545;
+}
+
+.signal-tooltip {
+    position: absolute;
+    background-color: rgba(0, 0, 0, 0.8);
+    color: #fff;
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-size: 12px;
+    z-index: 1001;
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.signal-long {
+    color: #198754;
+    font-weight: bold;
+}
+
+.signal-short {
+    color: #dc3545;
+    font-weight: bold;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    #tradingview-chart-container {
+        height: 400px;
+    }
+}

@@ -1,6 +1,6 @@
 # Binance Trading Bot
 
-A Python-based trading bot for Binance Futures with multiple technical indicators including RSI, EMA, Bollinger Bands, and MACD (5/13/1).
+A Python-based trading bot for Binance Futures with multiple technical indicators including RSI, EMA, Bollinger Bands, MACD (5/13/1), and Smart Money Concept (SMC) analysis.
 
 ## Features
 
@@ -63,15 +63,25 @@ A Python-based trading bot for Binance Futures with multiple technical indicator
 
 8. **Advanced Technical Analysis**
    - Combines multiple indicators for more reliable signals
-   - MACD (5/13/1) provides early trend detection
+   - MACD (5/13/1) provides early trend detection with prioritized crossing signals
    - RSI identifies overbought/oversold conditions
    - EMA crossovers confirm trend direction
    - Bollinger Bands identify volatility breakouts
-   - Signal strength scoring system (requires at least 2 out of 5 indicators to agree)
+   - Smart Money Concept (SMC) analysis for market structure
+   - Break of Structure (BOS) detection for trend reversals
+   - Fair Value Gap (FVG) identification for support/resistance levels
+   - Signal strength scoring system with weighted indicators
 
 9. **24/7 Automatic Operation**
    - All bots run as threads
    - Main loop keeps the program running indefinitely
+
+10. **Web Dashboard Interface**
+   - Real-time monitoring of bot status and performance
+   - View account balance, open positions, and recent trades
+   - Start and stop the bot from the web interface
+   - Configure trading mode and symbols through the UI
+   - Responsive design works on desktop and mobile devices
 
 ## Installation
 
@@ -95,10 +105,17 @@ A Python-based trading bot for Binance Futures with multiple technical indicator
 
 ## Usage
 
-Run the bot:
+Run the trading bot:
 ```
 python main.py
 ```
+
+Run the web dashboard:
+```
+python web_app.py
+```
+
+Then open your browser and navigate to `http://localhost:5000` to access the dashboard.
 
 ## Configuration
 
@@ -119,6 +136,9 @@ All configuration is done through environment variables or the `.env` file:
 - `EMA_SHORT_PERIOD`, `EMA_LONG_PERIOD`: EMA periods (default: 20/50)
 - `BB_PERIOD`, `BB_STD_DEV`: Bollinger Bands settings (period and standard deviation)
 - `MACD_FAST_PERIOD`, `MACD_SLOW_PERIOD`, `MACD_SIGNAL_PERIOD`: MACD settings (default: 5/13/1)
+- `SMC_ENABLED`: Whether to use Smart Money Concept indicators (default: TRUE)
+- `SMC_LOOKBACK`: Lookback period for market structure analysis (default: 10)
+- `FVG_ENTRY_THRESHOLD`: Threshold for FVG-based entries (default: 0.01 or 1% of price)
 - `TAKE_PROFIT_PERCENT` and `STOP_LOSS_PERCENT`: TP/SL settings
 - `DAILY_PROFIT_TARGET`: Daily profit target in percentage (default: 5%)
 - `DAILY_LOSS_LIMIT`: Daily loss limit in percentage (default: 3%)
@@ -132,7 +152,8 @@ All configuration is done through environment variables or the `.env` file:
 2. **Risk Warning**: Trading cryptocurrencies involves significant risk. Use this bot at your own risk.
 3. **Testing**: Always test with small amounts before using larger position sizes.
 4. **MACD Configuration**: The bot uses MACD with parameters 5/13/1 (fast EMA period: 5, slow EMA period: 13, signal period: 1) which is more responsive than the traditional 12/26/9 settings. This helps catch trends earlier but may generate more false signals in choppy markets.
-5. **Indicator Combination**: The bot uses a combination of 5 different indicators (RSI, candle patterns, EMA crossover, Bollinger Bands, and MACD) to generate stronger signals and reduce false positives.
+5. **Indicator Combination**: The bot uses a combination of multiple indicators (RSI, candle patterns, EMA crossover, Bollinger Bands, MACD, and Smart Money Concept) to generate stronger signals and reduce false positives.
+6. **Smart Money Concept (SMC)**: The bot analyzes market structure to identify trends, reversals, and key price levels using SMC principles. This includes Break of Structure (BOS) detection and Fair Value Gap (FVG) identification.
 
 ## Testing
 
@@ -145,7 +166,7 @@ python run_tests.py
 The test suite includes:
 
 - **BinanceClient Tests**: Tests API interactions and data handling
-- **Indicators Tests**: Tests technical indicators calculations (RSI, EMA, Bollinger Bands, MACD)
+- **Indicators Tests**: Tests technical indicators calculations (RSI, EMA, Bollinger Bands, MACD, SMC)
 - **PositionManager Tests**: Tests position sizing, account management, and risk controls
 - **TelegramNotifier Tests**: Tests notification functionality
 - **TradingBot Tests**: Tests the main bot logic and signal processing
@@ -155,6 +176,38 @@ Always run the tests after making changes to ensure everything works as expected
 ## Logs
 
 The bot logs all activities to both the console and a `bot.log` file.
+
+## Troubleshooting
+
+### Connection Issues
+
+If you experience connection issues with the Binance API, try the following solutions:
+
+1. **Check your internet connection**: Make sure you have a stable internet connection.
+
+2. **Use a proxy**: If you're behind a firewall or in a region with restricted access, you can use a proxy:
+   ```
+   USE_PROXY=TRUE
+   PROXY_URL=http://your-proxy-server:port
+   ```
+
+3. **Try fallback endpoints**: The bot automatically tries multiple Binance API endpoints if the primary one fails.
+
+4. **Increase timeouts**: If you have a slow connection, you might need to increase the connection timeouts in the code.
+
+5. **Check Binance API status**: Verify that the Binance API is operational by visiting their status page.
+
+6. **VPN issues**: If you're using a VPN, try connecting without it or switch to a different server.
+
+### Other Common Issues
+
+1. **API key permissions**: Make sure your Binance API key has the correct permissions (Futures trading enabled).
+
+2. **Insufficient balance**: Ensure you have enough balance in your Futures account.
+
+3. **Symbol not found**: Verify that the trading symbol exists and is available for Futures trading.
+
+4. **Rate limiting**: If you're making too many requests, you might get rate-limited. The bot implements exponential backoff to handle this.
 
 ## License
 

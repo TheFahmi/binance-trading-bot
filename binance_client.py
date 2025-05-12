@@ -6,6 +6,8 @@ import json
 from urllib.parse import urlencode
 import pandas as pd
 import config
+from functools import lru_cache
+from datetime import datetime, timedelta
 
 class BinanceClient:
     def __init__(self, api_key=None, api_secret=None, symbol=None):
@@ -13,17 +15,32 @@ class BinanceClient:
         self.api_secret = api_secret or config.API_SECRET
         self.base_url = config.BASE_URL
         self.symbol = symbol or config.SYMBOL
+        self.fallback_urls = config.FALLBACK_BASE_URLS.copy()
+        self.current_url_index = 0  # Track which URL we're currently using
+
+        # Initialize logging
+        import logging
+        self.logger = logging.getLogger(__name__)
+
+        # Initialize cache
+        self.cache = {}  # Dictionary to store cached data
 
         # Get exchange info to have precision data
-        self.exchange_info = self._get_exchange_info()
-        self.symbol_info = {}
+        try:
+            self.exchange_info = self._get_exchange_info()
+            self.symbol_info = {}
 
-        # Extract precision info for the symbol
-        for symbol_data in self.exchange_info['symbols']:
-            if symbol_data['symbol'] == self.symbol:
-                self.symbol_info = symbol_data
-                break
+            # Extract precision info for the symbol
+            for symbol_data in self.exchange_info['symbols']:
+                if symbol_data['symbol'] == self.symbol:
+                    self.symbol_info = symbol_data
+                    break
+        except Exception as e:
+            self.logger.error(f"Error initializing Binance client: {str(e)}")
+            self.exchange_info = {'symbols': []}
+            self.symbol_info = {}
 
+    # Cache high volume pairs for 30 minutes to reduce API calls
     def get_high_volume_pairs(self, min_volume=None, limit=20):
         """
         Get trading pairs with high 24h volume
@@ -37,6 +54,13 @@ class BinanceClient:
         """
         min_volume = min_volume or config.MIN_VOLUME_USDT
 
+        # Check if we have cached data
+        cache_key = f"high_volume_pairs_{min_volume}"
+        cached_data = self._get_from_cache(cache_key)
+        if cached_data:
+            self.logger.debug("Using cached high volume pairs data")
+            return cached_data
+
         # Get 24h ticker statistics
         tickers = self._send_request('GET', '/fapi/v1/ticker/24hr')
 
@@ -46,6 +70,9 @@ class BinanceClient:
         # Convert volume to float for sorting
         for pair in usdt_pairs:
             pair['quoteVolume'] = float(pair['quoteVolume'])
+
+        # Store in cache for 30 minutes
+        self._store_in_cache(cache_key, usdt_pairs, 30 * 60)  # 30 minutes in seconds
 
         # Sort by quote volume (USDT volume) in descending order
         usdt_pairs.sort(key=lambda x: x['quoteVolume'], reverse=True)
@@ -134,12 +161,64 @@ class BinanceClient:
             hashlib.sha256
         ).hexdigest()
 
-    def _send_request(self, method, endpoint, params=None, signed=False, recv_window=None):
-        url = f"{self.base_url}{endpoint}"
-        headers = {'X-MBX-APIKEY': self.api_key}
+    def _store_in_cache(self, key, data, ttl_seconds):
+        """
+        Store data in cache with expiration time
 
+        Args:
+            key: Cache key
+            data: Data to cache
+            ttl_seconds: Time to live in seconds
+        """
+        expiry_time = datetime.now() + timedelta(seconds=ttl_seconds)
+        self.cache[key] = {
+            'data': data,
+            'expiry': expiry_time
+        }
+
+    def _get_from_cache(self, key):
+        """
+        Get data from cache if it exists and is not expired
+
+        Args:
+            key: Cache key
+
+        Returns:
+            Cached data or None if not found or expired
+        """
+        if key in self.cache:
+            cache_entry = self.cache[key]
+            if datetime.now() < cache_entry['expiry']:
+                return cache_entry['data']
+            else:
+                # Remove expired entry
+                del self.cache[key]
+        return None
+
+    def _switch_endpoint(self):
+        """
+        Switch to the next available API endpoint
+
+        Returns:
+            bool: True if switched successfully, False if no more endpoints available
+        """
+        if not self.fallback_urls:
+            self.logger.error("No more fallback URLs available")
+            return False
+
+        # Get the next fallback URL
+        self.base_url = self.fallback_urls.pop(0)
+        self.current_url_index += 1
+        self.logger.warning(f"Switching to fallback endpoint: {self.base_url}")
+        return True
+
+    def _send_request(self, method, endpoint, params=None, signed=False, recv_window=None, retry_count=None):
         if params is None:
             params = {}
+
+        # Use retry count from config if not specified
+        if retry_count is None:
+            retry_count = config.API_RETRY_COUNT
 
         if signed:
             params['timestamp'] = self._get_timestamp()
@@ -148,17 +227,110 @@ class BinanceClient:
             query_string = urlencode(params)
             params['signature'] = self._generate_signature(query_string)
 
-        response = requests.request(
-            method=method,
-            url=url,
-            headers=headers,
-            params=params
-        )
+        # Set timeouts from config
+        connect_timeout = config.API_CONNECT_TIMEOUT
+        read_timeout = config.API_TIMEOUT
 
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise Exception(f"API request failed: {response.text}")
+        # Try with current endpoint and fallbacks if needed
+        max_endpoint_attempts = 1 + len(self.fallback_urls)
+
+        for endpoint_attempt in range(max_endpoint_attempts):
+            url = f"{self.base_url}{endpoint}"
+            headers = {'X-MBX-APIKEY': self.api_key}
+
+            # Implement retry logic with exponential backoff
+            for attempt in range(retry_count):
+                try:
+                    self.logger.debug(f"Sending request to {url}")
+
+                    # Set up proxies if configured
+                    proxies = None
+                    if config.USE_PROXY and config.PROXY_URL:
+                        proxies = {
+                            'http': config.PROXY_URL,
+                            'https': config.PROXY_URL
+                        }
+                        self.logger.debug(f"Using proxy: {config.PROXY_URL}")
+
+                    response = requests.request(
+                        method=method,
+                        url=url,
+                        headers=headers,
+                        params=params,
+                        timeout=(connect_timeout, read_timeout),  # (connect timeout, read timeout)
+                        proxies=proxies
+                    )
+
+                    if response.status_code == 200:
+                        return response.json()
+                    elif response.status_code == 429:  # Rate limit exceeded
+                        # Get retry-after header if available
+                        retry_after = response.headers.get('Retry-After')
+                        if retry_after:
+                            wait_time = int(retry_after)
+                        else:
+                            # Calculate wait time with exponential backoff
+                            wait_time = (2 ** attempt) + 5  # Increased base wait time
+
+                        self.logger.warning(f"Rate limit exceeded. Waiting {wait_time} seconds before retry.")
+                        import time
+                        time.sleep(wait_time)
+                        continue
+                    elif response.status_code >= 500:  # Server error
+                        wait_time = (2 ** attempt) + 1
+                        self.logger.warning(f"Server error (status {response.status_code}). Waiting {wait_time} seconds before retry.")
+                        import time
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        # For other errors, log the full response and raise a detailed exception
+                        error_msg = f"API request failed: Status {response.status_code}, Response: {response.text}"
+                        self.logger.error(error_msg)
+
+                        # Check if we have a JSON response with error details
+                        try:
+                            error_json = response.json()
+                            if 'code' in error_json and 'msg' in error_json:
+                                error_msg = f"API error {error_json['code']}: {error_json['msg']}"
+                        except:
+                            # If we can't parse JSON, use the text response
+                            pass
+
+                        # If this is not the last attempt, retry
+                        if attempt < retry_count - 1:
+                            wait_time = (2 ** attempt) + 2
+                            self.logger.warning(f"Request failed. Retrying in {wait_time} seconds... (Attempt {attempt+1}/{retry_count})")
+                            time.sleep(wait_time)
+                            continue
+
+                        # If this is the last attempt but we have more endpoints, break to try next endpoint
+                        if endpoint_attempt < max_endpoint_attempts - 1 and self._switch_endpoint():
+                            self.logger.info(f"Trying with fallback endpoint: {self.base_url}")
+                            break
+
+                        # Otherwise, raise the exception
+                        raise Exception(error_msg)
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                    if attempt < retry_count - 1:
+                        wait_time = (2 ** attempt) + 1
+                        self.logger.warning(f"Connection error: {str(e)}. Retrying in {wait_time} seconds... (Attempt {attempt+1}/{retry_count})")
+                        import time
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        self.logger.error(f"Failed to connect after {retry_count} attempts: {str(e)}")
+                        # Try switching to a fallback endpoint
+                        if endpoint_attempt < max_endpoint_attempts - 1 and self._switch_endpoint():
+                            self.logger.info(f"Trying with fallback endpoint: {self.base_url}")
+                            break  # Break the retry loop to try with new endpoint
+                        else:
+                            raise Exception(f"All API endpoints failed: {str(e)}")
+
+            # If we completed all retries without success but have more endpoints, continue to next endpoint
+            continue
+
+        # If we get here, all endpoints and retries failed
+        raise Exception(f"API request failed after trying all endpoints")
 
     def _get_exchange_info(self):
         return self._send_request('GET', '/fapi/v1/exchangeInfo')
@@ -171,41 +343,184 @@ class BinanceClient:
         """Get the quantity precision for the configured symbol"""
         return self.symbol_info.get('quantityPrecision', 3)
 
-    def get_klines(self, symbol=None, interval=None, limit=None):
-        """Get candlestick data"""
-        params = {
-            'symbol': symbol or config.SYMBOL,
-            'interval': interval or config.KLINE_INTERVAL,
-            'limit': limit or config.KLINE_LIMIT
-        }
+    def get_klines(self, symbol=None, interval=None, limit=None, max_retries=3):
+        """
+        Get candlestick data with enhanced error handling and fallbacks
 
-        klines = self._send_request('GET', '/fapi/v1/klines', params)
+        Args:
+            symbol: Trading symbol (default from config)
+            interval: Kline interval (default from config)
+            limit: Number of klines to get (default from config)
+            max_retries: Maximum number of retries for fallback methods
 
-        # Convert to DataFrame
-        df = pd.DataFrame(klines, columns=[
-            'open_time', 'open', 'high', 'low', 'close', 'volume',
-            'close_time', 'quote_asset_volume', 'number_of_trades',
-            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-        ])
+        Returns:
+            DataFrame with candlestick data
+        """
+        symbol = symbol or config.SYMBOL
+        interval = interval or config.KLINE_INTERVAL
+        limit = limit or config.KLINE_LIMIT
 
-        # Convert types
-        df['open'] = pd.to_numeric(df['open'])
-        df['high'] = pd.to_numeric(df['high'])
-        df['low'] = pd.to_numeric(df['low'])
-        df['close'] = pd.to_numeric(df['close'])
-        df['volume'] = pd.to_numeric(df['volume'])
+        # Check cache first (cache for 30 seconds for 1m candles, longer for higher timeframes)
+        cache_ttl = 30  # Default 30 seconds
+        if interval.endswith('m'):
+            # For minute candles, cache for interval length in seconds
+            try:
+                minutes = int(interval[:-1])
+                cache_ttl = minutes * 60
+            except ValueError:
+                cache_ttl = 30
+        elif interval.endswith('h'):
+            # For hour candles, cache for interval length in seconds
+            try:
+                hours = int(interval[:-1])
+                cache_ttl = hours * 3600
+            except ValueError:
+                cache_ttl = 300
+        elif interval.endswith('d'):
+            # For day candles, cache for 1 hour
+            cache_ttl = 3600
 
-        return df
+        cache_key = f"klines_{symbol}_{interval}_{limit}"
+        cached_data = self._get_from_cache(cache_key)
+        if cached_data is not None:
+            self.logger.debug(f"Using cached klines data for {symbol} {interval}")
+            return cached_data
+
+        # Main method: Try to get klines directly
+        try:
+            params = {
+                'symbol': symbol,
+                'interval': interval,
+                'limit': limit
+            }
+
+            klines = self._send_request('GET', '/fapi/v1/klines', params)
+
+            # Convert to DataFrame
+            df = pd.DataFrame(klines, columns=[
+                'open_time', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_asset_volume', 'number_of_trades',
+                'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+            ])
+
+            # Convert types
+            df['open'] = pd.to_numeric(df['open'])
+            df['high'] = pd.to_numeric(df['high'])
+            df['low'] = pd.to_numeric(df['low'])
+            df['close'] = pd.to_numeric(df['close'])
+            df['volume'] = pd.to_numeric(df['volume'])
+
+            # Store in cache
+            self._store_in_cache(cache_key, df, cache_ttl)
+
+            return df
+
+        except Exception as e:
+            self.logger.warning(f"Error getting klines for {symbol} {interval}: {str(e)}")
+
+            # Fallback 1: Try with a smaller limit
+            if limit > 100 and max_retries > 0:
+                self.logger.info(f"Trying with smaller limit (100) for {symbol} {interval}")
+                try:
+                    return self.get_klines(symbol, interval, 100, max_retries - 1)
+                except Exception as e2:
+                    self.logger.warning(f"Fallback 1 failed: {str(e2)}")
+
+            # Fallback 2: Try with a different interval
+            if max_retries > 0:
+                fallback_interval = None
+                if interval == '1m':
+                    fallback_interval = '3m'
+                elif interval == '3m':
+                    fallback_interval = '5m'
+                elif interval == '5m':
+                    fallback_interval = '15m'
+                elif interval == '15m':
+                    fallback_interval = '30m'
+                elif interval == '30m':
+                    fallback_interval = '1h'
+                elif interval == '1h':
+                    fallback_interval = '2h'
+                elif interval == '2h':
+                    fallback_interval = '4h'
+                elif interval == '4h':
+                    fallback_interval = '6h'
+                elif interval == '6h':
+                    fallback_interval = '8h'
+                elif interval == '8h':
+                    fallback_interval = '12h'
+                elif interval == '12h':
+                    fallback_interval = '1d'
+
+                if fallback_interval:
+                    self.logger.info(f"Trying with fallback interval {fallback_interval} for {symbol}")
+                    try:
+                        return self.get_klines(symbol, fallback_interval, limit, max_retries - 1)
+                    except Exception as e3:
+                        self.logger.warning(f"Fallback 2 failed: {str(e3)}")
+
+            # Fallback 3: Return empty DataFrame with correct structure
+            self.logger.error(f"All fallbacks failed for {symbol} {interval}. Returning empty DataFrame.")
+
+            # Create an empty DataFrame with the correct structure
+            empty_df = pd.DataFrame(columns=[
+                'open_time', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_asset_volume', 'number_of_trades',
+                'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
+            ])
+
+            # Convert types for the empty DataFrame
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                empty_df[col] = pd.to_numeric(empty_df[col])
+
+            # Add a warning row
+            warning_row = {
+                'open_time': int(time.time() * 1000),
+                'open': 0, 'high': 0, 'low': 0, 'close': 0, 'volume': 0,
+                'close_time': int(time.time() * 1000) + 60000,
+                'quote_asset_volume': 0, 'number_of_trades': 0,
+                'taker_buy_base_asset_volume': 0, 'taker_buy_quote_asset_volume': 0, 'ignore': 0
+            }
+            empty_df = pd.concat([empty_df, pd.DataFrame([warning_row])], ignore_index=True)
+
+            # Raise the original exception
+            raise Exception(f"Failed to get klines for {symbol} {interval}: {str(e)}")
 
     def get_current_price(self, symbol=None):
         """Get current price for a symbol"""
-        params = {'symbol': symbol or config.SYMBOL}
+        symbol = symbol or config.SYMBOL
+
+        # Check cache first (cache for 5 seconds)
+        cache_key = f"price_{symbol}"
+        cached_price = self._get_from_cache(cache_key)
+        if cached_price is not None:
+            self.logger.debug(f"Using cached price for {symbol}")
+            return cached_price
+
+        params = {'symbol': symbol}
         ticker = self._send_request('GET', '/fapi/v1/ticker/price', params)
-        return float(ticker['price'])
+        price = float(ticker['price'])
+
+        # Store in cache for 5 seconds
+        self._store_in_cache(cache_key, price, 5)
+
+        return price
 
     def get_account_info(self):
         """Get account information"""
-        return self._send_request('GET', '/fapi/v2/account', signed=True, recv_window=60000)
+        # Check cache first (cache for 10 seconds)
+        cache_key = "account_info"
+        cached_data = self._get_from_cache(cache_key)
+        if cached_data is not None:
+            self.logger.debug("Using cached account info")
+            return cached_data
+
+        account_info = self._send_request('GET', '/fapi/v2/account', signed=True, recv_window=60000)
+
+        # Store in cache for 10 seconds
+        self._store_in_cache(cache_key, account_info, 10)
+
+        return account_info
 
     def get_open_positions(self, symbol=None):
         """
@@ -511,6 +826,131 @@ class BinanceClient:
         }
 
         return self._send_request('POST', '/fapi/v1/order', params, signed=True, recv_window=60000)
+
+    def place_limit_order(self, side, quantity, price, position_side, symbol=None):
+        """
+        Place a limit order
+
+        Args:
+            side: 'BUY' or 'SELL'
+            quantity: Order quantity
+            price: Limit price
+            position_side: 'LONG' or 'SHORT'
+            symbol: Trading symbol (default from config)
+
+        Returns:
+            Response from API
+        """
+        params = {
+            'symbol': symbol or config.SYMBOL,
+            'side': side,
+            'type': 'LIMIT',
+            'quantity': quantity,
+            'price': price,
+            'positionSide': position_side,
+            'timeInForce': 'GTC'
+        }
+
+        return self._send_request('POST', '/fapi/v1/order', params, signed=True, recv_window=60000)
+
+    def place_stop_limit_order(self, side, quantity, stop_price, limit_price, position_side, symbol=None):
+        """
+        Place a stop-limit order
+
+        Args:
+            side: 'BUY' or 'SELL'
+            quantity: Order quantity
+            stop_price: Trigger price
+            limit_price: Limit price
+            position_side: 'LONG' or 'SHORT'
+            symbol: Trading symbol (default from config)
+
+        Returns:
+            Response from API
+        """
+        params = {
+            'symbol': symbol or config.SYMBOL,
+            'side': side,
+            'type': 'STOP',
+            'quantity': quantity,
+            'price': limit_price,
+            'stopPrice': stop_price,
+            'positionSide': position_side,
+            'timeInForce': 'GTC',
+            'workingType': 'MARK_PRICE'
+        }
+
+        return self._send_request('POST', '/fapi/v1/order', params, signed=True, recv_window=60000)
+
+    def cancel_order(self, order_id, symbol=None):
+        """
+        Cancel an order
+
+        Args:
+            order_id: Order ID to cancel
+            symbol: Trading symbol (default from config)
+
+        Returns:
+            Response from API
+        """
+        params = {
+            'symbol': symbol or config.SYMBOL,
+            'orderId': order_id
+        }
+
+        return self._send_request('DELETE', '/fapi/v1/order', params, signed=True, recv_window=60000)
+
+    def get_open_orders(self, symbol=None):
+        """
+        Get all open orders for a symbol
+
+        Args:
+            symbol: Trading symbol (default from config)
+
+        Returns:
+            List of open orders
+        """
+        params = {}
+        if symbol:
+            params['symbol'] = symbol
+
+        return self._send_request('GET', '/fapi/v1/openOrders', params, signed=True, recv_window=60000)
+
+    def get_order(self, order_id, symbol=None):
+        """
+        Get order details
+
+        Args:
+            order_id: Order ID
+            symbol: Trading symbol (default from config)
+
+        Returns:
+            Order details
+        """
+        params = {
+            'symbol': symbol or config.SYMBOL,
+            'orderId': order_id
+        }
+
+        return self._send_request('GET', '/fapi/v1/order', params, signed=True, recv_window=60000)
+
+    def get_recent_trades(self, symbol=None, limit=100):
+        """
+        Get recent trades for a symbol
+
+        Args:
+            symbol: Trading symbol (default from config)
+            limit: Maximum number of trades to return
+
+        Returns:
+            List of recent trades
+        """
+        params = {
+            'symbol': symbol or config.SYMBOL,
+            'limit': limit
+        }
+
+        return self._send_request('GET', '/fapi/v1/userTrades', params, signed=True, recv_window=60000)
 
     def round_price(self, price):
         """Round price according to symbol precision"""

@@ -1,0 +1,74 @@
+/* Custom styles for the trading bot dashboard */
+
+body {
+    background-color: #f8f9fa;
+}
+
+.card {
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    border-radius: 0.5rem;
+    border: none;
+}
+
+.card-header {
+    border-top-left-radius: 0.5rem !important;
+    border-top-right-radius: 0.5rem !important;
+}
+
+.table {
+    margin-bottom: 0;
+}
+
+.table th {
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.table td {
+    font-size: 0.85rem;
+    vertical-align: middle;
+}
+
+.positive-value {
+    color: #198754;
+}
+
+.negative-value {
+    color: #dc3545;
+}
+
+#bot-status-indicator {
+    display: flex;
+    align-items: center;
+}
+
+#bot-status-indicator i {
+    font-size: 0.75rem;
+}
+
+.status-running i {
+    color: #198754 !important;
+}
+
+.status-stopped i {
+    color: #dc3545 !important;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .card-title {
+        font-size: 1rem;
+    }
+    
+    h4 {
+        font-size: 1.25rem;
+    }
+    
+    h5 {
+        font-size: 1.1rem;
+    }
+    
+    h6 {
+        font-size: 0.9rem;
+    }
+}

@@ -166,18 +166,49 @@ def calculate_macd(df, fast_period=None, slow_period=None, signal_period=None):
     df['macd_zero_cross_up'] = (df['macd_line'] > 0) & (df['macd_line'].shift(1) <= 0)
     df['macd_zero_cross_down'] = (df['macd_line'] < 0) & (df['macd_line'].shift(1) >= 0)
 
+    # Calculate MACD divergence
+    df['macd_bullish_divergence'] = False
+    df['macd_bearish_divergence'] = False
+
+    # Look for regular bullish divergence: price makes lower low but MACD makes higher low
+    for i in range(5, len(df)):
+        # Find local price lows in the last 10 candles
+        if df.iloc[i]['low'] == df.iloc[i-5:i+1]['low'].min():
+            # Look back for previous low
+            for j in range(i-5, max(0, i-20), -1):
+                if df.iloc[j]['low'] == df.iloc[max(0, j-5):j+1]['low'].min():
+                    # Check for bullish divergence
+                    if df.iloc[i]['low'] < df.iloc[j]['low'] and df.iloc[i]['macd_line'] > df.iloc[j]['macd_line']:
+                        df.loc[df.index[i], 'macd_bullish_divergence'] = True
+                    break
+
+    # Look for regular bearish divergence: price makes higher high but MACD makes lower high
+    for i in range(5, len(df)):
+        # Find local price highs in the last 10 candles
+        if df.iloc[i]['high'] == df.iloc[i-5:i+1]['high'].max():
+            # Look back for previous high
+            for j in range(i-5, max(0, i-20), -1):
+                if df.iloc[j]['high'] == df.iloc[max(0, j-5):j+1]['high'].max():
+                    # Check for bearish divergence
+                    if df.iloc[i]['high'] > df.iloc[j]['high'] and df.iloc[i]['macd_line'] < df.iloc[j]['macd_line']:
+                        df.loc[df.index[i], 'macd_bearish_divergence'] = True
+                    break
+
     return df
 
-def check_entry_signal(df):
+def check_entry_signal(df, use_smc=True):
     """
     Check for entry signals based on multiple indicators:
     - RSI and candle patterns
     - EMA crossovers
     - Bollinger Band breakouts
-    - MACD crossovers
+    - MACD crossovers (prioritized)
+    - Smart Money Concept (SMC) market structure
+    - Fair Value Gaps (FVG)
 
     Args:
         df: DataFrame with OHLC and indicator data
+        use_smc: Whether to use Smart Money Concept indicators
 
     Returns:
         Signal: 'LONG', 'SHORT', or None
@@ -189,40 +220,104 @@ def check_entry_signal(df):
     long_signals = 0
     short_signals = 0
 
-    # Check RSI and candle pattern
-    if latest['rsi'] < config.RSI_OVERSOLD and latest['is_green']:
-        long_signals += 1
-    elif latest['rsi'] > config.RSI_OVERBOUGHT and latest['is_red']:
-        short_signals += 1
+    # Initialize signal weights (higher weight = more important)
+    long_weight = 0
+    short_weight = 0
 
-    # Check EMA crossover
-    if latest['ema_cross_up']:
-        long_signals += 1
-    elif latest['ema_cross_down']:
-        short_signals += 1
-
-    # Check Bollinger Band breakout
-    if latest['bb_breakout_up']:
-        long_signals += 1
-    elif latest['bb_breakout_down']:
-        short_signals += 1
-
-    # Check MACD crossover
+    # Check MACD crossover (prioritized)
     if 'macd_cross_up' in latest and latest['macd_cross_up']:
         long_signals += 1
+        long_weight += 2  # Higher weight for MACD cross
     elif 'macd_cross_down' in latest and latest['macd_cross_down']:
         short_signals += 1
+        short_weight += 2  # Higher weight for MACD cross
+
+    # Check MACD divergence
+    if 'macd_bullish_divergence' in latest and latest['macd_bullish_divergence']:
+        long_signals += 1
+        long_weight += 1.5
+    elif 'macd_bearish_divergence' in latest and latest['macd_bearish_divergence']:
+        short_signals += 1
+        short_weight += 1.5
 
     # Check MACD zero line crossover
     if 'macd_zero_cross_up' in latest and latest['macd_zero_cross_up']:
         long_signals += 1
+        long_weight += 1
     elif 'macd_zero_cross_down' in latest and latest['macd_zero_cross_down']:
         short_signals += 1
+        short_weight += 1
 
-    # Determine final signal based on signal strength
-    if long_signals >= 2:  # At least 2 indicators suggest LONG
+    # Check RSI and candle pattern
+    if latest['rsi'] < config.RSI_OVERSOLD and latest['is_green']:
+        long_signals += 1
+        long_weight += 1
+    elif latest['rsi'] > config.RSI_OVERBOUGHT and latest['is_red']:
+        short_signals += 1
+        short_weight += 1
+
+    # Check EMA crossover
+    if latest['ema_cross_up']:
+        long_signals += 1
+        long_weight += 1
+    elif latest['ema_cross_down']:
+        short_signals += 1
+        short_weight += 1
+
+    # Check Bollinger Band breakout
+    if latest['bb_breakout_up']:
+        long_signals += 1
+        long_weight += 1
+    elif latest['bb_breakout_down']:
+        short_signals += 1
+        short_weight += 1
+
+    # Check Smart Money Concept (SMC) market structure if available
+    if use_smc and 'market_structure' in latest:
+        if latest['market_structure'] in ['uptrend', 'bullish_reversal']:
+            long_signals += 1
+            long_weight += 1.5
+        elif latest['market_structure'] in ['downtrend', 'bearish_reversal']:
+            short_signals += 1
+            short_weight += 1.5
+
+    # Check for Break of Structure (BOS) if available
+    if use_smc and 'bos_bullish' in latest and latest['bos_bullish']:
+        long_signals += 1
+        long_weight += 1.5
+    elif use_smc and 'bos_bearish' in latest and latest['bos_bearish']:
+        short_signals += 1
+        short_weight += 1.5
+
+    # Check for Fair Value Gaps (FVG) if available
+    if use_smc and 'nearest_bullish_fvg' in latest and not pd.isna(latest['nearest_bullish_fvg']):
+        # If price is near a bullish FVG, it's a potential support level
+        fvg_idx = latest['nearest_bullish_fvg']
+        if fvg_idx in df.index:
+            fvg_bottom = df.loc[fvg_idx, 'fvg_bottom']
+            # If price is close to the FVG bottom (potential support)
+            if abs(latest['close'] - fvg_bottom) / latest['close'] < 0.01:  # Within 1%
+                long_signals += 1
+                long_weight += 1
+
+    if use_smc and 'nearest_bearish_fvg' in latest and not pd.isna(latest['nearest_bearish_fvg']):
+        # If price is near a bearish FVG, it's a potential resistance level
+        fvg_idx = latest['nearest_bearish_fvg']
+        if fvg_idx in df.index:
+            fvg_top = df.loc[fvg_idx, 'fvg_top']
+            # If price is close to the FVG top (potential resistance)
+            if abs(latest['close'] - fvg_top) / latest['close'] < 0.01:  # Within 1%
+                short_signals += 1
+                short_weight += 1
+
+    # Determine final signal based on signal strength and weights
+    # MACD crossing is prioritized, so we require it for entry
+    macd_cross_up = 'macd_cross_up' in latest and latest['macd_cross_up']
+    macd_cross_down = 'macd_cross_down' in latest and latest['macd_cross_down']
+
+    if macd_cross_up and long_signals >= 2 and long_weight > short_weight:
         return 'LONG'
-    elif short_signals >= 2:  # At least 2 indicators suggest SHORT
+    elif macd_cross_down and short_signals >= 2 and short_weight > long_weight:
         return 'SHORT'
     else:
         return None

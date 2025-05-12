@@ -46,6 +46,11 @@ MACD_FAST_PERIOD = int(os.getenv('MACD_FAST_PERIOD', '5'))  # Fast EMA period (d
 MACD_SLOW_PERIOD = int(os.getenv('MACD_SLOW_PERIOD', '13'))  # Slow EMA period (default: 13)
 MACD_SIGNAL_PERIOD = int(os.getenv('MACD_SIGNAL_PERIOD', '1'))  # Signal EMA period (default: 1)
 
+# Smart Money Concept (SMC) parameters
+SMC_LOOKBACK = int(os.getenv('SMC_LOOKBACK', '10'))  # Lookback period for market structure analysis
+SMC_ENABLED = os.getenv('SMC_ENABLED', 'TRUE').upper() == 'TRUE'  # Whether to use SMC indicators
+FVG_ENTRY_THRESHOLD = float(os.getenv('FVG_ENTRY_THRESHOLD', '0.01'))  # Threshold for FVG-based entries (1% of price)
+
 # Take profit and stop loss settings
 TAKE_PROFIT_PERCENT = float(os.getenv('TAKE_PROFIT_PERCENT', '0.6'))  # 0.6% take profit
 STOP_LOSS_PERCENT = float(os.getenv('STOP_LOSS_PERCENT', '0.3'))  # 0.3% stop loss
@@ -54,6 +59,21 @@ STOP_LOSS_PERCENT = float(os.getenv('STOP_LOSS_PERCENT', '0.3'))  # 0.3% stop lo
 DAILY_PROFIT_TARGET = float(os.getenv('DAILY_PROFIT_TARGET', '10.0'))  # 10% daily profit target
 DAILY_LOSS_LIMIT = float(os.getenv('DAILY_LOSS_LIMIT', '5.0'))  # 5% daily loss limit
 PNL_REPORT_INTERVAL = int(os.getenv('PNL_REPORT_INTERVAL', '3600'))  # Send PnL report every hour (3600 seconds)
+SEND_INITIAL_PNL_REPORT = os.getenv('SEND_INITIAL_PNL_REPORT', 'FALSE').upper() == 'TRUE'  # Whether to send PnL report when bot starts
+
+# Grid Trading settings
+GRID_TRADING_ENABLED = os.getenv('GRID_TRADING_ENABLED', 'FALSE').upper() == 'TRUE'  # Whether to use grid trading
+GRID_BUY_COUNT = int(os.getenv('GRID_BUY_COUNT', '2'))  # Number of buy grids
+GRID_SELL_COUNT = int(os.getenv('GRID_SELL_COUNT', '2'))  # Number of sell grids
+GRID_BUY_TRIGGER_PERCENTAGES = [float(x) for x in os.getenv('GRID_BUY_TRIGGER_PERCENTAGES', '1.0,0.8').split(',')]  # Trigger percentages for buy grids
+GRID_BUY_STOP_PERCENTAGES = [float(x) for x in os.getenv('GRID_BUY_STOP_PERCENTAGES', '1.05,1.03').split(',')]  # Stop price percentages for buy grids
+GRID_BUY_LIMIT_PERCENTAGES = [float(x) for x in os.getenv('GRID_BUY_LIMIT_PERCENTAGES', '1.051,1.031').split(',')]  # Limit price percentages for buy grids
+GRID_BUY_QUANTITIES_USDT = [float(x) for x in os.getenv('GRID_BUY_QUANTITIES_USDT', '50,100').split(',')]  # USDT amounts for buy grids
+GRID_SELL_TRIGGER_PERCENTAGES = [float(x) for x in os.getenv('GRID_SELL_TRIGGER_PERCENTAGES', '1.05,1.08').split(',')]  # Trigger percentages for sell grids
+GRID_SELL_STOP_PERCENTAGES = [float(x) for x in os.getenv('GRID_SELL_STOP_PERCENTAGES', '0.97,0.95').split(',')]  # Stop price percentages for sell grids
+GRID_SELL_LIMIT_PERCENTAGES = [float(x) for x in os.getenv('GRID_SELL_LIMIT_PERCENTAGES', '0.969,0.949').split(',')]  # Limit price percentages for sell grids
+GRID_SELL_QUANTITIES_PERCENTAGES = [float(x) for x in os.getenv('GRID_SELL_QUANTITIES_PERCENTAGES', '0.5,1.0').split(',')]  # Percentage of available quantity to sell for each grid
+GRID_LAST_BUY_PRICE_REMOVAL_THRESHOLD = float(os.getenv('GRID_LAST_BUY_PRICE_REMOVAL_THRESHOLD', '10.0'))  # Minimum value in USDT to keep last buy price
 
 # Bot settings
 CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '30'))  # Check for signals every 30 seconds
@@ -62,6 +82,10 @@ KLINE_LIMIT = int(os.getenv('KLINE_LIMIT', '100'))  # Number of candles to fetch
 
 # API settings
 RECV_WINDOW = int(os.getenv('RECV_WINDOW', '60000'))  # recvWindow parameter for API requests (milliseconds)
+
+# Network settings
+USE_PROXY = os.getenv('USE_PROXY', 'FALSE').upper() == 'TRUE'  # Whether to use a proxy for API requests
+PROXY_URL = os.getenv('PROXY_URL', '')  # Proxy URL (e.g., 'http://user:pass@host:port')
 
 # Margin percentage rules based on leverage
 # lev ≤ 25x margin 5%
@@ -85,4 +109,21 @@ def get_margin_percentage(leverage):
 MARGIN_PERCENTAGE = get_margin_percentage(LEVERAGE)
 
 # Binance API URLs
-BASE_URL = 'https://fapi.binance.com'  # Futures API base URL
+# Primary and fallback API endpoints
+PRIMARY_BASE_URL = 'https://fapi.binance.com'  # Primary Futures API base URL
+FALLBACK_BASE_URLS = [
+    'https://fapi1.binance.com',  # Fallback 1
+    'https://fapi2.binance.com',  # Fallback 2
+    'https://fapi3.binance.com',  # Fallback 3
+    'https://dapi.binance.com',   # Delivery API (can work for some endpoints)
+    'https://api.binance.com',    # Spot API (can work for some endpoints)
+    'https://api1.binance.com',   # Spot API fallback 1
+    'https://api2.binance.com',   # Spot API fallback 2
+    'https://api3.binance.com'    # Spot API fallback 3
+]
+BASE_URL = PRIMARY_BASE_URL  # Default to primary URL
+
+# API request settings
+API_RETRY_COUNT = int(os.getenv('API_RETRY_COUNT', '3'))  # Number of retries for API requests
+API_TIMEOUT = int(os.getenv('API_TIMEOUT', '30'))  # Timeout for API requests in seconds
+API_CONNECT_TIMEOUT = int(os.getenv('API_CONNECT_TIMEOUT', '10'))  # Connection timeout in seconds
