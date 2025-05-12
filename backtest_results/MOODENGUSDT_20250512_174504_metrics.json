@@ -1,0 +1,17 @@
+{
+    "symbol": "MOODENGUSDT",
+    "start_date": "2025-05-01",
+    "end_date": "2025-05-10",
+    "initial_balance": 50.0,
+    "final_balance": 80.21632801421109,
+    "total_trades": 110,
+    "winning_trades": 62,
+    "losing_trades": 48,
+    "win_rate": 0.5636363636363636,
+    "profit_factor": 4.677299530967011,
+    "max_drawdown": 1.14128872020828,
+    "max_drawdown_pct": 0.020811942170097558,
+    "total_profit": 30.216328014211086,
+    "total_profit_pct": 60.43265602842217,
+    "sharpe_ratio": 0.6711925649054322
+}

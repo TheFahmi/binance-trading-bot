@@ -1,0 +1,17 @@
+{
+    "symbol": "BTCUSDT",
+    "start_date": "2025-05-01",
+    "end_date": "2025-05-10",
+    "initial_balance": 100.0,
+    "final_balance": 98.75215463639195,
+    "total_trades": 65,
+    "winning_trades": 20,
+    "losing_trades": 45,
+    "win_rate": 0.3076923076923077,
+    "profit_factor": 0.9046407573378313,
+    "max_drawdown": 2.978124737920055,
+    "max_drawdown_pct": 0.02978124737920055,
+    "total_profit": -1.2478453636080502,
+    "total_profit_pct": -1.2478453636080502,
+    "sharpe_ratio": -0.0445988808051147
+}

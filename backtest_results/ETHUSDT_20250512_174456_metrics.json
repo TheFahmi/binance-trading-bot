@@ -1,0 +1,17 @@
+{
+    "symbol": "ETHUSDT",
+    "start_date": "2025-05-01",
+    "end_date": "2025-05-10",
+    "initial_balance": 50.0,
+    "final_balance": 51.25268973698281,
+    "total_trades": 79,
+    "winning_trades": 20,
+    "losing_trades": 59,
+    "win_rate": 0.25316455696202533,
+    "profit_factor": 1.1439590331621414,
+    "max_drawdown": 1.0959340713054928,
+    "max_drawdown_pct": 0.021918681426109855,
+    "total_profit": 1.2526897369828092,
+    "total_profit_pct": 2.5053794739656183,
+    "sharpe_ratio": 0.05834790654553556
+}
