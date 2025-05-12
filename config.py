@@ -41,6 +41,11 @@ EMA_LONG_PERIOD = int(os.getenv('EMA_LONG_PERIOD', '50'))  # Long EMA period (de
 BB_PERIOD = int(os.getenv('BB_PERIOD', '20'))  # Bollinger Bands period (default: 20)
 BB_STD_DEV = float(os.getenv('BB_STD_DEV', '2.0'))  # Number of standard deviations (default: 2.0)
 
+# MACD parameters
+MACD_FAST_PERIOD = int(os.getenv('MACD_FAST_PERIOD', '5'))  # Fast EMA period (default: 5)
+MACD_SLOW_PERIOD = int(os.getenv('MACD_SLOW_PERIOD', '13'))  # Slow EMA period (default: 13)
+MACD_SIGNAL_PERIOD = int(os.getenv('MACD_SIGNAL_PERIOD', '1'))  # Signal EMA period (default: 1)
+
 # Take profit and stop loss settings
 TAKE_PROFIT_PERCENT = float(os.getenv('TAKE_PROFIT_PERCENT', '0.6'))  # 0.6% take profit
 STOP_LOSS_PERCENT = float(os.getenv('STOP_LOSS_PERCENT', '0.3'))  # 0.3% stop loss

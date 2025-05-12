@@ -35,6 +35,9 @@ class TestIndicators(unittest.TestCase):
         self.mock_config.EMA_LONG_PERIOD = 50
         self.mock_config.BB_PERIOD = 20
         self.mock_config.BB_STD_DEV = 2.0
+        self.mock_config.MACD_FAST_PERIOD = 5
+        self.mock_config.MACD_SLOW_PERIOD = 13
+        self.mock_config.MACD_SIGNAL_PERIOD = 1
 
     def tearDown(self):
         """Tear down test fixtures"""
@@ -125,6 +128,40 @@ class TestIndicators(unittest.TestCase):
         percent_b_valid = result_df.loc[between_bands & valid_idx, 'bb_percent_b']
         self.assertTrue((percent_b_valid >= 0).all() and (percent_b_valid <= 1).all())
 
+    def test_calculate_macd(self):
+        """Test calculate_macd function"""
+        # Call the function
+        result_df = indicators.calculate_macd(self.df)
+
+        # Verify the result
+        self.assertIn('macd_fast_ema', result_df.columns)
+        self.assertIn('macd_slow_ema', result_df.columns)
+        self.assertIn('macd_line', result_df.columns)
+        self.assertIn('macd_signal', result_df.columns)
+        self.assertIn('macd_histogram', result_df.columns)
+        self.assertIn('macd_cross_up', result_df.columns)
+        self.assertIn('macd_cross_down', result_df.columns)
+        self.assertIn('macd_zero_cross_up', result_df.columns)
+        self.assertIn('macd_zero_cross_down', result_df.columns)
+        self.assertEqual(len(result_df), len(self.df))
+
+        # Check that MACD line is the difference between fast and slow EMAs
+        valid_idx = result_df['macd_line'].notna()
+        for i in result_df.index[valid_idx]:
+            self.assertAlmostEqual(
+                result_df.loc[i, 'macd_line'],
+                result_df.loc[i, 'macd_fast_ema'] - result_df.loc[i, 'macd_slow_ema'],
+                places=10
+            )
+
+        # Check that histogram is the difference between MACD line and signal line
+        for i in result_df.index[valid_idx]:
+            self.assertAlmostEqual(
+                result_df.loc[i, 'macd_histogram'],
+                result_df.loc[i, 'macd_line'] - result_df.loc[i, 'macd_signal'],
+                places=10
+            )
+
     def test_check_entry_signal(self):
         """Test check_entry_signal function"""
         # Prepare test data with known signals
@@ -138,6 +175,10 @@ class TestIndicators(unittest.TestCase):
         df['ema_cross_down'] = False
         df['bb_breakout_up'] = False
         df['bb_breakout_down'] = False
+        df['macd_cross_up'] = False
+        df['macd_cross_down'] = False
+        df['macd_zero_cross_up'] = False
+        df['macd_zero_cross_down'] = False
 
         # Test case 1: No signal (neutral)
         signal = indicators.check_entry_signal(df)
@@ -166,8 +207,34 @@ class TestIndicators(unittest.TestCase):
         df.loc[99, 'ema_cross_up'] = False
         df.loc[99, 'bb_breakout_up'] = False
         df.loc[99, 'bb_breakout_down'] = False
+        df.loc[99, 'macd_cross_up'] = False
+        df.loc[99, 'macd_zero_cross_up'] = False
         signal = indicators.check_entry_signal(df)
         self.assertIsNone(signal)
+
+        # Test case 5: LONG signal with MACD (RSI oversold + MACD cross up)
+        df.loc[99, 'rsi'] = 25  # Oversold
+        df.loc[99, 'is_green'] = True
+        df.loc[99, 'macd_cross_up'] = True
+        signal = indicators.check_entry_signal(df)
+        self.assertEqual(signal, 'LONG')
+
+        # Test case 6: SHORT signal with MACD (RSI overbought + MACD cross down)
+        df.loc[99, 'rsi'] = 75  # Overbought
+        df.loc[99, 'is_green'] = False
+        df.loc[99, 'is_red'] = True
+        df.loc[99, 'macd_cross_up'] = False
+        df.loc[99, 'macd_cross_down'] = True
+        signal = indicators.check_entry_signal(df)
+        self.assertEqual(signal, 'SHORT')
+
+        # Test case 7: LONG signal with MACD zero line (EMA cross up + MACD zero cross up)
+        df.loc[99, 'rsi'] = 50  # Neutral
+        df.loc[99, 'ema_cross_up'] = True
+        df.loc[99, 'macd_cross_down'] = False
+        df.loc[99, 'macd_zero_cross_up'] = True
+        signal = indicators.check_entry_signal(df)
+        self.assertEqual(signal, 'LONG')
 
 if __name__ == '__main__':
     unittest.main()

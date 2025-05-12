@@ -204,8 +204,11 @@ class TelegramNotifier:
                 f"BB Upper: {indicators['bb_upper']:.2f}\n"
                 f"BB Middle: {indicators['bb_middle']:.2f}\n"
                 f"BB Lower: {indicators['bb_lower']:.2f}\n"
-                f"BB %B: {indicators['bb_percent_b']:.2f}\n\n"
-                f"Signal Strength: {indicators['signal_strength']}/3"
+                f"BB %B: {indicators['bb_percent_b']:.2f}\n"
+                f"MACD Line: {indicators['macd_line']:.4f}\n"
+                f"MACD Signal: {indicators['macd_signal']:.4f}\n"
+                f"MACD Histogram: {indicators['macd_histogram']:.4f}\n\n"
+                f"Signal Strength: {indicators['signal_strength']}/5"
             )
 
         return self.send_message(message)

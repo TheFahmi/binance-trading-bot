@@ -125,12 +125,56 @@ def calculate_bollinger_bands(df, period=None, std_dev=None):
 
     return df
 
+def calculate_macd(df, fast_period=None, slow_period=None, signal_period=None):
+    """
+    Calculate MACD (Moving Average Convergence Divergence)
+
+    Args:
+        df: DataFrame with OHLC data
+        fast_period: Fast EMA period (default from config)
+        slow_period: Slow EMA period (default from config)
+        signal_period: Signal EMA period (default from config)
+
+    Returns:
+        DataFrame with MACD values
+    """
+    fast_period = fast_period or config.MACD_FAST_PERIOD
+    slow_period = slow_period or config.MACD_SLOW_PERIOD
+    signal_period = signal_period or config.MACD_SIGNAL_PERIOD
+
+    # Make a copy of the dataframe to avoid modifying the original
+    df = df.copy()
+
+    # Calculate fast and slow EMAs
+    df['macd_fast_ema'] = df['close'].ewm(span=fast_period, adjust=False).mean()
+    df['macd_slow_ema'] = df['close'].ewm(span=slow_period, adjust=False).mean()
+
+    # Calculate MACD line
+    df['macd_line'] = df['macd_fast_ema'] - df['macd_slow_ema']
+
+    # Calculate signal line
+    df['macd_signal'] = df['macd_line'].ewm(span=signal_period, adjust=False).mean()
+
+    # Calculate histogram
+    df['macd_histogram'] = df['macd_line'] - df['macd_signal']
+
+    # Calculate MACD crossover signals
+    df['macd_cross_up'] = (df['macd_line'] > df['macd_signal']) & (df['macd_line'].shift(1) <= df['macd_signal'].shift(1))
+    df['macd_cross_down'] = (df['macd_line'] < df['macd_signal']) & (df['macd_line'].shift(1) >= df['macd_signal'].shift(1))
+
+    # Calculate zero line crossover signals
+    df['macd_zero_cross_up'] = (df['macd_line'] > 0) & (df['macd_line'].shift(1) <= 0)
+    df['macd_zero_cross_down'] = (df['macd_line'] < 0) & (df['macd_line'].shift(1) >= 0)
+
+    return df
+
 def check_entry_signal(df):
     """
     Check for entry signals based on multiple indicators:
     - RSI and candle patterns
     - EMA crossovers
     - Bollinger Band breakouts
+    - MACD crossovers
 
     Args:
         df: DataFrame with OHLC and indicator data
@@ -161,6 +205,18 @@ def check_entry_signal(df):
     if latest['bb_breakout_up']:
         long_signals += 1
     elif latest['bb_breakout_down']:
+        short_signals += 1
+
+    # Check MACD crossover
+    if 'macd_cross_up' in latest and latest['macd_cross_up']:
+        long_signals += 1
+    elif 'macd_cross_down' in latest and latest['macd_cross_down']:
+        short_signals += 1
+
+    # Check MACD zero line crossover
+    if 'macd_zero_cross_up' in latest and latest['macd_zero_cross_up']:
+        long_signals += 1
+    elif 'macd_zero_cross_down' in latest and latest['macd_zero_cross_down']:
         short_signals += 1
 
     # Determine final signal based on signal strength

@@ -8,7 +8,7 @@ import config
 from binance_client import BinanceClient
 from indicators import (
     calculate_rsi, detect_candle_pattern, calculate_ema,
-    calculate_bollinger_bands, check_entry_signal
+    calculate_bollinger_bands, calculate_macd, check_entry_signal
 )
 from position_manager import PositionManager
 from telegram_notifier import TelegramNotifier
@@ -157,6 +157,7 @@ class TradingBot:
             df = detect_candle_pattern(df)
             df = calculate_ema(df)
             df = calculate_bollinger_bands(df)
+            df = calculate_macd(df)
 
             # Check for entry signal
             signal = check_entry_signal(df)
@@ -168,6 +169,7 @@ class TradingBot:
                 f"Candle: {'Green' if latest['is_green'] else 'Red' if latest['is_red'] else 'Neutral'}, "
                 f"EMA: {latest[f'ema_{config.EMA_SHORT_PERIOD}']:.2f}/{latest[f'ema_{config.EMA_LONG_PERIOD}']:.2f}, "
                 f"BB: {latest['bb_percent_b']:.2f}, "
+                f"MACD: {latest['macd_line']:.4f}/{latest['macd_signal']:.4f}, "
                 f"Signal: {signal or 'WAIT'}"
             )
 
@@ -207,6 +209,18 @@ class TradingBot:
             if latest['bb_breakout_up']:
                 long_signals += 1
             elif latest['bb_breakout_down']:
+                short_signals += 1
+
+            # Check MACD crossover
+            if 'macd_cross_up' in latest and latest['macd_cross_up']:
+                long_signals += 1
+            elif 'macd_cross_down' in latest and latest['macd_cross_down']:
+                short_signals += 1
+
+            # Check MACD zero line crossover
+            if 'macd_zero_cross_up' in latest and latest['macd_zero_cross_up']:
+                long_signals += 1
+            elif 'macd_zero_cross_down' in latest and latest['macd_zero_cross_down']:
                 short_signals += 1
 
             indicator_values['signal_strength'] = long_signals if signal == 'LONG' else short_signals

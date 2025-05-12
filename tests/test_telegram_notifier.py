@@ -357,7 +357,10 @@ class TestTelegramNotifier(unittest.TestCase):
             'bb_middle': 50000.0,
             'bb_lower': 49000.0,
             'bb_percent_b': 0.8,
-            'signal_strength': 2
+            'macd_line': 25.5,
+            'macd_signal': 20.3,
+            'macd_histogram': 5.2,
+            'signal_strength': 3
         }
 
         # Call the method
@@ -373,7 +376,10 @@ class TestTelegramNotifier(unittest.TestCase):
         self.assertIn('Green', kwargs['data']['text'])
         self.assertIn('49000.00', kwargs['data']['text'])
         self.assertIn('48000.00', kwargs['data']['text'])
-        self.assertIn('Signal Strength: 2/3', kwargs['data']['text'])
+        self.assertIn('25.5000', kwargs['data']['text'])  # MACD line
+        self.assertIn('20.3000', kwargs['data']['text'])  # MACD signal
+        self.assertIn('5.2000', kwargs['data']['text'])   # MACD histogram
+        self.assertIn('Signal Strength: 3/5', kwargs['data']['text'])
 
 if __name__ == '__main__':
     unittest.main()
