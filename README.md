@@ -1,6 +1,6 @@
 # Binance Trading Bot
 
-A Python-based trading bot for Binance Futures with RSI and candle pattern signals.
+A Python-based trading bot for Binance Futures with multiple technical indicators including RSI, EMA, Bollinger Bands, and MACD (5/13/1).
 
 ## Features
 
@@ -18,7 +18,10 @@ A Python-based trading bot for Binance Futures with RSI and candle pattern signa
    - Bollinger Bands Breakout:
      - LONG signal: Price breaks above upper band
      - SHORT signal: Price breaks below lower band
-   - Signal strength: At least 2 indicators must agree for entry
+   - MACD (5/13/1):
+     - LONG signal: MACD line crosses above signal line or MACD line crosses above zero
+     - SHORT signal: MACD line crosses below signal line or MACD line crosses below zero
+   - Signal strength: At least 2 out of 5 indicators must agree for entry
 
 3. **Automatic Position Sizing Based on Account Balance**
    - Uses a percentage of your account balance for position sizing
@@ -58,7 +61,15 @@ A Python-based trading bot for Binance Futures with RSI and candle pattern signa
    - Sends periodic PnL reports via Telegram
    - Resets PnL tracking at the start of each new day
 
-8. **24/7 Automatic Operation**
+8. **Advanced Technical Analysis**
+   - Combines multiple indicators for more reliable signals
+   - MACD (5/13/1) provides early trend detection
+   - RSI identifies overbought/oversold conditions
+   - EMA crossovers confirm trend direction
+   - Bollinger Bands identify volatility breakouts
+   - Signal strength scoring system (requires at least 2 out of 5 indicators to agree)
+
+9. **24/7 Automatic Operation**
    - All bots run as threads
    - Main loop keeps the program running indefinitely
 
@@ -66,8 +77,8 @@ A Python-based trading bot for Binance Futures with RSI and candle pattern signa
 
 1. Clone the repository:
    ```
-   git clone https://github.com/TheFahmi/binance-trading-bot.git
-   cd binance-trading-bot
+   git clone https://github.com/yourusername/binance-bot.git
+   cd binance-bot
    ```
 
 2. Install dependencies:
@@ -107,6 +118,7 @@ All configuration is done through environment variables or the `.env` file:
 - `RSI_PERIOD`, `RSI_OVERSOLD`, `RSI_OVERBOUGHT`: RSI settings
 - `EMA_SHORT_PERIOD`, `EMA_LONG_PERIOD`: EMA periods (default: 20/50)
 - `BB_PERIOD`, `BB_STD_DEV`: Bollinger Bands settings (period and standard deviation)
+- `MACD_FAST_PERIOD`, `MACD_SLOW_PERIOD`, `MACD_SIGNAL_PERIOD`: MACD settings (default: 5/13/1)
 - `TAKE_PROFIT_PERCENT` and `STOP_LOSS_PERCENT`: TP/SL settings
 - `DAILY_PROFIT_TARGET`: Daily profit target in percentage (default: 5%)
 - `DAILY_LOSS_LIMIT`: Daily loss limit in percentage (default: 3%)
@@ -119,6 +131,8 @@ All configuration is done through environment variables or the `.env` file:
 1. **API Key Permissions**: Your Binance API key needs futures trading permissions.
 2. **Risk Warning**: Trading cryptocurrencies involves significant risk. Use this bot at your own risk.
 3. **Testing**: Always test with small amounts before using larger position sizes.
+4. **MACD Configuration**: The bot uses MACD with parameters 5/13/1 (fast EMA period: 5, slow EMA period: 13, signal period: 1) which is more responsive than the traditional 12/26/9 settings. This helps catch trends earlier but may generate more false signals in choppy markets.
+5. **Indicator Combination**: The bot uses a combination of 5 different indicators (RSI, candle patterns, EMA crossover, Bollinger Bands, and MACD) to generate stronger signals and reduce false positives.
 
 ## Testing
 
@@ -131,7 +145,7 @@ python run_tests.py
 The test suite includes:
 
 - **BinanceClient Tests**: Tests API interactions and data handling
-- **Indicators Tests**: Tests technical indicators calculations (RSI, EMA, Bollinger Bands)
+- **Indicators Tests**: Tests technical indicators calculations (RSI, EMA, Bollinger Bands, MACD)
 - **PositionManager Tests**: Tests position sizing, account management, and risk controls
 - **TelegramNotifier Tests**: Tests notification functionality
 - **TradingBot Tests**: Tests the main bot logic and signal processing
