@@ -66,8 +66,8 @@ A Python-based trading bot for Binance Futures with RSI and candle pattern signa
 
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/binance-bot.git
-   cd binance-bot
+   git clone https://github.com/TheFahmi/binance-trading-bot.git
+   cd binance-trading-bot
    ```
 
 2. Install dependencies:
