@@ -72,6 +72,7 @@ class PositionManager:
         5. Calculate margin amount based on margin percentage
         6. Apply leverage to get effective position size in USDT
         7. Convert to quantity: effective_position_size / price
+        8. Ensure notional value (quantity * price) is at least 5 USDT
 
         Margin percentage rules:
         - lev ≤ 25x: margin 5%
@@ -92,6 +93,9 @@ class PositionManager:
 
         symbol = symbol or config.SYMBOL
         leverage = leverage or config.LEVERAGE
+
+        # Minimum notional value required by Binance
+        MIN_NOTIONAL_VALUE = 5.0  # 5 USDT minimum
 
         # Get account balance
         total_balance = self.get_account_balance()
@@ -127,7 +131,27 @@ class PositionManager:
         # Calculate quantity
         quantity = effective_position_size / price
 
-        logging.info(f"Calculated position size for {symbol}: {quantity} (value: {effective_position_size:.2f} USDT, {max_position_percent:.2f}% of balance)")
+        # Check if notional value meets minimum requirement
+        notional_value = quantity * price
+
+        if notional_value < MIN_NOTIONAL_VALUE:
+            logging.warning(f"Calculated notional value ({notional_value:.2f} USDT) is less than minimum required ({MIN_NOTIONAL_VALUE} USDT)")
+
+            # Adjust quantity to meet minimum notional value
+            min_quantity = MIN_NOTIONAL_VALUE / price
+
+            # If the minimum quantity would exceed our available balance, we can't place the order
+            min_quantity_value = min_quantity * price / leverage * (100 / margin_percentage)
+            min_balance_needed = min_quantity_value * 100 / max_position_percent
+
+            if min_balance_needed > total_balance:
+                logging.warning(f"Insufficient balance ({total_balance:.2f} USDT) to meet minimum notional value. Need at least {min_balance_needed:.2f} USDT.")
+                return 0
+
+            logging.info(f"Adjusting quantity from {quantity} to {min_quantity} to meet minimum notional value")
+            quantity = min_quantity
+
+        logging.info(f"Calculated position size for {symbol}: {quantity} (value: {quantity * price:.2f} USDT, {max_position_percent:.2f}% of balance)")
 
         # Round according to symbol precision
         return self.client.round_quantity(quantity)
@@ -298,7 +322,12 @@ class PositionManager:
         Returns:
             Hedge position size
         """
+        import logging
+
         symbol = symbol or config.SYMBOL
+
+        # Minimum notional value required by Binance
+        MIN_NOTIONAL_VALUE = 5.0  # 5 USDT minimum
 
         # Get the original position amount
         original_position_amt = abs(original_position_info['position_amt'])
@@ -306,5 +335,123 @@ class PositionManager:
         # Calculate hedge position size based on the ratio
         hedge_position_size = original_position_amt * config.HEDGE_POSITION_SIZE_RATIO
 
+        # Get current price to check notional value
+        current_price = self.client.get_current_price(symbol)
+
+        # Check if notional value meets minimum requirement
+        notional_value = hedge_position_size * current_price
+
+        if notional_value < MIN_NOTIONAL_VALUE:
+            logging.warning(f"Calculated hedge notional value ({notional_value:.2f} USDT) is less than minimum required ({MIN_NOTIONAL_VALUE} USDT)")
+
+            # Adjust quantity to meet minimum notional value
+            min_quantity = MIN_NOTIONAL_VALUE / current_price
+
+            # If the minimum quantity would exceed our original position, cap it
+            if min_quantity > original_position_amt:
+                logging.warning(f"Minimum quantity ({min_quantity}) exceeds original position size ({original_position_amt}). Using original position size.")
+                hedge_position_size = original_position_amt
+            else:
+                logging.info(f"Adjusting hedge quantity from {hedge_position_size} to {min_quantity} to meet minimum notional value")
+                hedge_position_size = min_quantity
+
         # Round according to symbol precision
         return self.client.round_quantity(hedge_position_size)
+
+    def is_profitable_after_fees(self, position_info, current_price=None, symbol=None):
+        """
+        Check if closing a position would be profitable after considering trading fees
+
+        Args:
+            position_info: Dictionary with position information
+            current_price: Current market price (if None, will be fetched)
+            symbol: Trading symbol (default from config)
+
+        Returns:
+            Tuple (is_profitable, profit_info)
+        """
+        import logging
+
+        symbol = symbol or config.SYMBOL
+
+        try:
+            # Get position details
+            entry_price = float(position_info['entry_price'])
+            position_amt = abs(float(position_info['position_amt']))
+            position_side = position_info['position_side']
+
+            # Get current price if not provided
+            if current_price is None:
+                current_price = self.client.get_current_price(symbol)
+
+            # Determine if LONG or SHORT
+            is_long = position_side == 'LONG'
+
+            # Calculate raw profit (without fees)
+            if is_long:
+                raw_profit_percentage = ((current_price / entry_price) - 1) * 100
+                raw_profit = (current_price - entry_price) * position_amt
+            else:  # SHORT
+                raw_profit_percentage = ((entry_price / current_price) - 1) * 100
+                raw_profit = (entry_price - current_price) * position_amt
+
+            # Calculate fees for closing the position (market order = taker fee)
+            close_fee_info = self.client.calculate_trading_fees(
+                quantity=position_amt,
+                price=current_price,
+                is_market_order=True
+            )
+
+            # Calculate fees for opening the position (assume it was a market order)
+            open_fee_info = self.client.calculate_trading_fees(
+                quantity=position_amt,
+                price=entry_price,
+                is_market_order=True
+            )
+
+            # Calculate total fees
+            total_fees = close_fee_info['fee_amount'] + open_fee_info['fee_amount']
+
+            # Calculate net profit after fees
+            net_profit = raw_profit - total_fees
+
+            # Calculate net profit percentage
+            position_value = position_amt * entry_price
+            net_profit_percentage = (net_profit / position_value) * 100 if position_value > 0 else 0
+
+            # Determine if profitable after fees
+            is_profitable = net_profit > 0
+
+            # Check if profit meets minimum threshold
+            meets_min_profit = net_profit_percentage >= config.MIN_PROFIT_AFTER_FEES
+
+            # Create profit info dictionary
+            profit_info = {
+                'position_side': position_side,
+                'entry_price': entry_price,
+                'current_price': current_price,
+                'position_amt': position_amt,
+                'raw_profit': raw_profit,
+                'raw_profit_percentage': raw_profit_percentage,
+                'open_fee': open_fee_info['fee_amount'],
+                'close_fee': close_fee_info['fee_amount'],
+                'total_fees': total_fees,
+                'net_profit': net_profit,
+                'net_profit_percentage': net_profit_percentage,
+                'is_profitable': is_profitable,
+                'meets_min_profit': meets_min_profit
+            }
+
+            # Log the calculation
+            logging.debug(
+                f"Profit calculation for {symbol} {position_side}: "
+                f"entry={entry_price:.6f}, current={current_price:.6f}, "
+                f"raw_profit={raw_profit:.6f} ({raw_profit_percentage:.2f}%), "
+                f"fees={total_fees:.6f}, net_profit={net_profit:.6f} ({net_profit_percentage:.2f}%)"
+            )
+
+            return meets_min_profit, profit_info
+
+        except Exception as e:
+            logging.error(f"Error checking if position is profitable after fees: {str(e)}")
+            return False, None

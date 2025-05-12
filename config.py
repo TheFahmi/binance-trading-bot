@@ -62,6 +62,12 @@ DAILY_LOSS_LIMIT = float(os.getenv('DAILY_LOSS_LIMIT', '5.0'))  # 5% daily loss 
 PNL_REPORT_INTERVAL = int(os.getenv('PNL_REPORT_INTERVAL', '3600'))  # Send PnL report every hour (3600 seconds)
 SEND_INITIAL_PNL_REPORT = os.getenv('SEND_INITIAL_PNL_REPORT', 'FALSE').upper() == 'TRUE'  # Whether to send PnL report when bot starts
 
+# Notification settings
+NOTIFY_SIGNALS = os.getenv('NOTIFY_SIGNALS', 'FALSE').upper() == 'TRUE'  # Whether to send signal notifications
+NOTIFY_ENTRIES = os.getenv('NOTIFY_ENTRIES', 'TRUE').upper() == 'TRUE'  # Whether to send position entry notifications
+NOTIFY_EXITS = os.getenv('NOTIFY_EXITS', 'TRUE').upper() == 'TRUE'  # Whether to send position exit notifications
+NOTIFY_PNL = os.getenv('NOTIFY_PNL', 'TRUE').upper() == 'TRUE'  # Whether to send PnL notifications
+
 # Grid Trading settings
 GRID_TRADING_ENABLED = os.getenv('GRID_TRADING_ENABLED', 'FALSE').upper() == 'TRUE'  # Whether to use grid trading
 GRID_BUY_COUNT = int(os.getenv('GRID_BUY_COUNT', '2'))  # Number of buy grids
@@ -110,19 +116,15 @@ def get_margin_percentage(leverage):
 MARGIN_PERCENTAGE = get_margin_percentage(LEVERAGE)
 
 # Binance API URLs
-# Primary and fallback API endpoints
+# Primary API endpoint only
 PRIMARY_BASE_URL = 'https://fapi.binance.com'  # Primary Futures API base URL
-FALLBACK_BASE_URLS = [
-    'https://fapi1.binance.com',  # Fallback 1
-    'https://fapi2.binance.com',  # Fallback 2
-    'https://fapi3.binance.com',  # Fallback 3
-    'https://dapi.binance.com',   # Delivery API (can work for some endpoints)
-    'https://api.binance.com',    # Spot API (can work for some endpoints)
-    'https://api1.binance.com',   # Spot API fallback 1
-    'https://api2.binance.com',   # Spot API fallback 2
-    'https://api3.binance.com'    # Spot API fallback 3
-]
+FALLBACK_BASE_URLS = []  # No fallback URLs - use only the primary URL
 BASE_URL = PRIMARY_BASE_URL  # Default to primary URL
+
+# Trading fee settings
+MAKER_FEE_RATE = float(os.getenv('MAKER_FEE_RATE', '0.0002'))  # 0.02% maker fee
+TAKER_FEE_RATE = float(os.getenv('TAKER_FEE_RATE', '0.0004'))  # 0.04% taker fee
+MIN_PROFIT_AFTER_FEES = float(os.getenv('MIN_PROFIT_AFTER_FEES', '0.05'))  # Minimum profit percentage after fees (0.05%)
 
 # API request settings
 API_RETRY_COUNT = int(os.getenv('API_RETRY_COUNT', '3'))  # Number of retries for API requests

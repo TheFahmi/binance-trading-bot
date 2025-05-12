@@ -25,8 +25,14 @@ class TelegramNotifier:
         Returns:
             Response from Telegram API or None if disabled
         """
+        # Check if notifications are disabled
         if not self.enabled:
             logging.info(f"Telegram notification (disabled): {message}")
+            return None
+
+        # Check if we're in backtest or simulation mode and should ignore
+        if self.is_backtest_or_simulation and config.IGNORE_BACKTEST_SIMULATION:
+            logging.debug(f"Telegram notification (ignored for backtest/simulation): {message}")
             return None
 
         try:
@@ -66,6 +72,11 @@ class TelegramNotifier:
             account_usage: Current account usage percentage (optional)
             is_hedge: Whether this is a hedge position (optional)
         """
+        # Check if entry notifications are enabled
+        if not config.NOTIFY_ENTRIES:
+            logging.info(f"Entry notification disabled: {position_side} position at {entry_price}")
+            return None
+
         # Use actual leverage if provided, otherwise use config value
         actual_leverage = leverage or config.LEVERAGE
         margin_percentage = config.get_margin_percentage(actual_leverage)
@@ -126,6 +137,11 @@ class TelegramNotifier:
             exit_price: Exit price
             profit_percent: Profit percentage
         """
+        # Check if exit notifications are enabled
+        if not config.NOTIFY_EXITS:
+            logging.info(f"Exit notification disabled: TP hit for {position_side} position, profit: {profit_percent:.2f}%")
+            return None
+
         message = (
             f"💰 <b>TAKE PROFIT HIT</b> 💰\n\n"
             f"Symbol: {config.SYMBOL}\n"
@@ -147,6 +163,11 @@ class TelegramNotifier:
             exit_price: Exit price
             loss_percent: Loss percentage
         """
+        # Check if exit notifications are enabled
+        if not config.NOTIFY_EXITS:
+            logging.info(f"Exit notification disabled: SL hit for {position_side} position, loss: {loss_percent:.2f}%")
+            return None
+
         message = (
             f"🛑 <b>STOP LOSS HIT</b> 🛑\n\n"
             f"Symbol: {config.SYMBOL}\n"
@@ -180,6 +201,11 @@ class TelegramNotifier:
             signal: Signal type ('LONG', 'SHORT', or 'WAIT')
             indicators: Dictionary with indicator values
         """
+        # Check if signal notifications are enabled
+        if not config.NOTIFY_SIGNALS:
+            logging.info(f"Signal notification disabled: {signal}")
+            return None
+
         if signal == 'WAIT':
             return None
 
@@ -271,6 +297,11 @@ class TelegramNotifier:
         Args:
             pnl_summary: Dictionary with PnL summary data
         """
+        # Check if PnL notifications are enabled
+        if not config.NOTIFY_PNL:
+            logging.info(f"PnL notification disabled: Daily PnL {pnl_summary['pnl_percentage']:.2f}%")
+            return None
+
         # Format PnL values with 2 decimal places and + sign for positive values
         total_pnl = f"{'+' if pnl_summary['total_pnl'] > 0 else ''}{pnl_summary['total_pnl']:.2f}"
         realized_pnl = f"{'+' if pnl_summary['realized_pnl'] > 0 else ''}{pnl_summary['realized_pnl']:.2f}"
@@ -307,6 +338,11 @@ class TelegramNotifier:
         Args:
             pnl_summary: Dictionary with PnL summary data
         """
+        # Check if PnL notifications are enabled
+        if not config.NOTIFY_PNL:
+            logging.info(f"PnL notification disabled: Profit target reached {pnl_summary['pnl_percentage']:.2f}%")
+            return None
+
         message = (
             f"🎯 <b>DAILY PROFIT TARGET REACHED</b> 🎯\n\n"
             f"Target: +{config.DAILY_PROFIT_TARGET:.2f}%\n"
@@ -324,6 +360,11 @@ class TelegramNotifier:
         Args:
             pnl_summary: Dictionary with PnL summary data
         """
+        # Check if PnL notifications are enabled
+        if not config.NOTIFY_PNL:
+            logging.info(f"PnL notification disabled: Loss limit reached {pnl_summary['pnl_percentage']:.2f}%")
+            return None
+
         message = (
             f"🛑 <b>DAILY LOSS LIMIT REACHED</b> 🛑\n\n"
             f"Limit: -{config.DAILY_LOSS_LIMIT:.2f}%\n"
@@ -397,6 +438,43 @@ class TelegramNotifier:
             f"SHORT Position: {abs(pnl_info['short_position']['position_amt'])} @ {pnl_info['short_position']['entry_price']}\n"
             f"SHORT PnL: {pnl_info['short_position']['unrealized_pnl']:.2f} USDT ({pnl_info['short_position']['unrealized_pnl_percent']:.2f}%)\n"
             f"Combined PnL: {pnl_info['combined_unrealized_pnl']:.2f} USDT ({pnl_info['combined_unrealized_pnl_percent']:.2f}%)"
+        )
+
+        return self.send_message(message)
+
+    def notify_fee_adjusted_tp(self, position_side, original_tp_price, adjusted_tp_price, profit_info):
+        """
+        Send notification about fee-adjusted take profit price
+
+        Args:
+            position_side: 'LONG' or 'SHORT'
+            original_tp_price: Original take profit price
+            adjusted_tp_price: Adjusted take profit price
+            profit_info: Dictionary with profit calculation information
+        """
+        # Check if entry notifications are enabled (this is considered part of entry process)
+        if not config.NOTIFY_ENTRIES:
+            logging.info(f"Fee-adjusted TP notification disabled: {position_side} position, adjusted TP: {adjusted_tp_price}")
+            return None
+
+        if not self.enabled:
+            return
+
+        # Format the message
+        message = (
+            f"⚠️ <b>TAKE PROFIT ADJUSTED FOR FEES</b> ⚠️\n\n"
+            f"Symbol: {config.SYMBOL}\n"
+            f"Position: {position_side}\n"
+            f"Entry Price: {profit_info['entry_price']}\n"
+            f"Original TP: {original_tp_price}\n"
+            f"Adjusted TP: {adjusted_tp_price}\n\n"
+            f"<b>Profit Calculation:</b>\n"
+            f"Raw Profit: {profit_info['raw_profit']:.6f} USDT ({profit_info['raw_profit_percentage']:.2f}%)\n"
+            f"Open Fee: {profit_info['open_fee']:.6f} USDT\n"
+            f"Close Fee: {profit_info['close_fee']:.6f} USDT\n"
+            f"Total Fees: {profit_info['total_fees']:.6f} USDT\n"
+            f"Net Profit: {profit_info['net_profit']:.6f} USDT ({profit_info['net_profit_percentage']:.2f}%)\n\n"
+            f"<i>TP price was adjusted to ensure profitability after trading fees.</i>"
         )
 
         return self.send_message(message)

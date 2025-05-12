@@ -711,20 +711,19 @@ def main():
     parser.add_argument('--end', type=str, default=None, help='End date (YYYY-MM-DD), defaults to today')
     parser.add_argument('--balance', type=float, default=10000, help='Initial balance in USDT')
     parser.add_argument('--multi', action='store_true', help='Run backtest for multiple symbols')
+    parser.add_argument('--min-volume', type=float, default=config.MIN_VOLUME_USDT, help='Minimum 24h volume in USDT for symbol selection')
+    parser.add_argument('--limit', type=int, default=5, help='Maximum number of symbols to test in multi mode')
 
     args = parser.parse_args()
 
     if args.multi:
         # Get high volume pairs
         client = BinanceClient()
-        symbols = client.get_high_volume_pairs(config.MIN_VOLUME_USDT)
+        symbols = client.get_high_volume_pairs(args.min_volume, args.limit)
 
         if not symbols:
             logger.error("Failed to get high volume pairs")
             return
-
-        # Limit to top 5 by volume
-        symbols = symbols[:5]
 
         logger.info(f"Running backtest for {len(symbols)} symbols: {', '.join(symbols)}")
 

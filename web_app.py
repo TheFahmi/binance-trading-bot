@@ -185,11 +185,66 @@ def update_bot_status():
                     # Update positions if interval has passed
                     if current_time - last_update["positions"] >= update_intervals["positions"]:
                         try:
+                            # Get open positions with enhanced error handling
                             positions = client.get_open_positions()
+
+                            # Log the number of positions found
+                            logger.info(f"Found {len(positions)} open positions")
+
+                            # Add mark price to each position for easier display
+                            for pos in positions:
+                                try:
+                                    pos_symbol = pos.get('symbol', '')
+                                    if 'markPrice' not in pos:
+                                        pos['markPrice'] = client.get_current_price(pos_symbol)
+
+                                    # Add position side if not present (for one-way mode)
+                                    if 'positionSide' not in pos:
+                                        pos_amt = float(pos.get('positionAmt', 0))
+                                        pos['positionSide'] = 'LONG' if pos_amt > 0 else 'SHORT'
+
+                                    # Calculate unrealized PnL for display
+                                    entry_price = float(pos.get('entryPrice', 0))
+                                    mark_price = float(pos.get('markPrice', 0))
+                                    position_amt = float(pos.get('positionAmt', 0))
+                                    leverage = int(pos.get('leverage', 1))
+
+                                    # Determine if LONG or SHORT based on position amount
+                                    is_long = position_amt > 0
+
+                                    # Calculate unrealized PnL
+                                    if is_long:
+                                        unrealized_pnl = (mark_price - entry_price) * abs(position_amt)
+                                        if entry_price > 0:
+                                            unrealized_pnl_percent = ((mark_price / entry_price) - 1) * 100 * leverage
+                                        else:
+                                            unrealized_pnl_percent = 0
+                                    else:  # SHORT
+                                        unrealized_pnl = (entry_price - mark_price) * abs(position_amt)
+                                        if entry_price > 0 and mark_price > 0:
+                                            unrealized_pnl_percent = ((entry_price / mark_price) - 1) * 100 * leverage
+                                        else:
+                                            unrealized_pnl_percent = 0
+
+                                    # Add calculated values to position
+                                    pos['unrealizedProfit'] = unrealized_pnl
+                                    pos['unrealizedProfitPercent'] = unrealized_pnl_percent
+
+                                except Exception as e:
+                                    logger.error(f"Error processing position {pos.get('symbol', 'unknown')}: {str(e)}")
+
                             if positions is not None:
                                 bot_status["positions"] = positions
+
                             last_update["positions"] = current_time
-                            logger.debug("Positions updated")
+                            logger.info(f"Positions updated: {len(positions)} positions")
+
+                            # Log the first few positions for debugging
+                            for i, pos in enumerate(positions[:3]):
+                                logger.info(f"Position {i+1}: {pos.get('symbol', 'unknown')} {pos.get('positionSide', 'unknown')} "
+                                           f"{pos.get('positionAmt', 0)} @ {pos.get('entryPrice', 0)} "
+                                           f"PnL: {pos.get('unrealizedProfit', 0):.2f} ({pos.get('unrealizedProfitPercent', 0):.2f}%)")
+
                         except Exception as e:
                             logger.error(f"Error updating positions: {str(e)}")
 

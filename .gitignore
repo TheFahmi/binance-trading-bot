@@ -110,3 +110,9 @@ bot.log
 # Credentials and sensitive data
 credentials.json
 secrets.json
+
+# Backtest and simulation results
+backtest_results/
+simulation_results/
+backtest.log
+simulation.log

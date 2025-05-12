@@ -108,6 +108,11 @@ class TradingBot:
             # Check if profit target is reached
             if pnl_summary['pnl_percentage'] >= config.DAILY_PROFIT_TARGET:
                 logger.info(f"Daily profit target reached for {self.symbol}: {pnl_summary['pnl_percentage']:.2f}% >= {config.DAILY_PROFIT_TARGET}%")
+
+                # Add warning if the percentage is exactly equal to the target (might be capped)
+                if pnl_summary['pnl_percentage'] == config.DAILY_PROFIT_TARGET:
+                    logger.warning(f"PnL percentage is exactly equal to the target. This might be due to capping in the get_daily_pnl method.")
+
                 self.telegram.notify_profit_target_reached(pnl_summary)
                 return False
 
@@ -348,6 +353,59 @@ class TradingBot:
             tp_price = self.position_manager.calculate_take_profit_price(current_price, signal)
             sl_price = self.position_manager.calculate_stop_loss_price(current_price, signal)
 
+            # Create position info dictionary for fee calculation
+            position_info = {
+                'entry_price': current_price,
+                'position_amt': quantity,
+                'position_side': signal
+            }
+
+            # Check if the take profit price would be profitable after fees
+            is_profitable, profit_info = self.position_manager.is_profitable_after_fees(
+                position_info=position_info,
+                current_price=tp_price,
+                symbol=self.symbol
+            )
+
+            # If not profitable after fees, adjust the take profit price
+            if not is_profitable and profit_info:
+                # Store the original TP price for notification
+                original_tp_price = tp_price
+
+                logger.warning(
+                    f"Take profit price {tp_price} would not be profitable after fees. "
+                    f"Raw profit: {profit_info['raw_profit']:.6f}, Fees: {profit_info['total_fees']:.6f}, "
+                    f"Net profit: {profit_info['net_profit']:.6f}"
+                )
+
+                # Calculate a new take profit price that would be profitable after fees
+                # For LONG positions, we need a higher price; for SHORT positions, we need a lower price
+                if signal == 'LONG':
+                    # Increase the take profit percentage
+                    adjusted_tp_percent = config.TAKE_PROFIT_PERCENT + config.MIN_PROFIT_AFTER_FEES + (config.TAKER_FEE_RATE * 200)
+                    tp_price = current_price * (1 + adjusted_tp_percent / 100)
+                else:  # SHORT
+                    # Increase the take profit percentage (for shorts, this means a lower price)
+                    adjusted_tp_percent = config.TAKE_PROFIT_PERCENT + config.MIN_PROFIT_AFTER_FEES + (config.TAKER_FEE_RATE * 200)
+                    tp_price = current_price * (1 - adjusted_tp_percent / 100)
+
+                # Round according to symbol precision
+                tp_price = self.client.round_price(tp_price)
+
+                logger.info(
+                    f"Adjusted take profit price to {tp_price} to ensure profitability after fees. "
+                    f"Original TP percent: {config.TAKE_PROFIT_PERCENT}%, "
+                    f"Adjusted TP percent: {adjusted_tp_percent}%"
+                )
+
+                # Send notification about the adjusted TP price
+                self.telegram.notify_fee_adjusted_tp(
+                    position_side=signal,
+                    original_tp_price=original_tp_price,
+                    adjusted_tp_price=tp_price,
+                    profit_info=profit_info
+                )
+
             # Place take profit order with error handling
             tp_side = 'SELL' if signal == 'LONG' else 'BUY'
             try:
@@ -513,6 +571,9 @@ class BotManager:
         print("Initializing BotManager...")
         self.client = BinanceClient()
 
+        # Track closed symbols to avoid repeatedly trying them
+        self.closed_symbols = set()
+
         # If USE_HIGH_VOLUME_PAIRS is enabled, get high volume pairs
         if config.USE_HIGH_VOLUME_PAIRS:
             print(f"Finding trading pairs with 24h volume >= {config.MIN_VOLUME_USDT:,.0f} USDT")
@@ -526,35 +587,93 @@ class BotManager:
             # Use provided symbols or default
             self.symbols = symbols or [config.SYMBOL]
 
+        # Filter out any known closed symbols
+        self.filter_closed_symbols()
+
         print(f"Trading on {len(self.symbols)} pairs: {', '.join(self.symbols)}")
         logger.info(f"Trading on {len(self.symbols)} pairs: {', '.join(self.symbols)}")
 
         self.bots = {}
         self.threads = {}
 
+    def filter_closed_symbols(self):
+        """Filter out symbols that are known to be closed"""
+        active_symbols = []
+        for symbol in self.symbols:
+            try:
+                # Try to get current price to check if symbol is active
+                self.client.get_current_price(symbol)
+                active_symbols.append(symbol)
+            except Exception as e:
+                if "Symbol is closed" in str(e):
+                    logger.warning(f"Symbol {symbol} is closed. Skipping.")
+                    self.closed_symbols.add(symbol)
+                else:
+                    # If it's another error, keep the symbol and try again later
+                    logger.warning(f"Error checking {symbol}: {str(e)}. Will try again.")
+                    active_symbols.append(symbol)
+
+        self.symbols = active_symbols
+
     def start_bot(self, symbol):
         """
         Start a trading bot for a symbol
         """
-        bot = TradingBot(symbol)
-        self.bots[symbol] = bot
+        # Skip if symbol is in the closed list
+        if symbol in self.closed_symbols:
+            logger.warning(f"Not starting bot for {symbol} as it is marked as closed")
+            return False
 
-        # Create and start thread
-        thread = threading.Thread(target=bot.run, daemon=True)
-        thread.start()
+        try:
+            # Check if symbol is active before starting the bot
+            self.client.get_current_price(symbol)
 
-        self.threads[symbol] = thread
+            bot = TradingBot(symbol)
+            self.bots[symbol] = bot
 
-        logger.info(f"Started bot for {symbol}")
+            # Create and start thread
+            thread = threading.Thread(target=bot.run, daemon=True)
+            thread.start()
+
+            self.threads[symbol] = thread
+
+            logger.info(f"Started bot for {symbol}")
+            return True
+
+        except Exception as e:
+            if "Symbol is closed" in str(e):
+                logger.warning(f"Symbol {symbol} is closed. Marking as closed and skipping.")
+                self.closed_symbols.add(symbol)
+                if symbol in self.symbols:
+                    self.symbols.remove(symbol)
+                return False
+            else:
+                logger.error(f"Error starting bot for {symbol}: {str(e)}")
+                return False
 
     def start_all(self):
         """
         Start trading bots for all configured symbols
         """
-        for symbol in self.symbols:
-            self.start_bot(symbol)
+        started_count = 0
+        skipped_count = 0
+
+        for symbol in self.symbols[:]:  # Create a copy of the list to iterate over
+            result = self.start_bot(symbol)
+            if result:
+                started_count += 1
+            else:
+                skipped_count += 1
+
             # Small delay between starting bots to avoid rate limits
             time.sleep(1)
+
+        logger.info(f"Started {started_count} bots, skipped {skipped_count} closed symbols")
+
+        # If all symbols were closed, try to find new ones
+        if started_count == 0 and config.USE_HIGH_VOLUME_PAIRS:
+            logger.warning("All symbols were closed. Trying to find new high volume pairs...")
+            self.update_trading_pairs(force=True)
 
     def monitor(self):
         """
@@ -568,11 +687,14 @@ class BotManager:
 
             time.sleep(60)
 
-    def update_trading_pairs(self):
+    def update_trading_pairs(self, force=False):
         """
         Update the list of trading pairs based on current volume
+
+        Args:
+            force: If True, force update even if USE_HIGH_VOLUME_PAIRS is disabled
         """
-        if not config.USE_HIGH_VOLUME_PAIRS:
+        if not config.USE_HIGH_VOLUME_PAIRS and not force:
             return
 
         logger.info("Updating high volume trading pairs...")
@@ -580,6 +702,13 @@ class BotManager:
 
         if not new_symbols:
             logger.warning("No high volume pairs found. Keeping current symbols.")
+            return
+
+        # Filter out closed symbols
+        new_symbols = [s for s in new_symbols if s not in self.closed_symbols]
+
+        if not new_symbols:
+            logger.warning("All high volume pairs are closed. No symbols to trade.")
             return
 
         # Stop bots for symbols that are no longer in the list
@@ -592,10 +721,12 @@ class BotManager:
                 del self.bots[symbol]
                 del self.threads[symbol]
 
+        # Update the symbols list
+        self.symbols = new_symbols
+
         # Start bots for new symbols
         for symbol in new_symbols:
             if symbol not in self.threads:
                 logger.info(f"Starting bot for new high volume pair: {symbol}")
                 self.start_bot(symbol)
-
-        self.symbols = new_symbols
+                time.sleep(1)  # Small delay to avoid rate limits

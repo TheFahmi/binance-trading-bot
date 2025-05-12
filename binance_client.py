@@ -213,7 +213,9 @@ class BinanceClient:
             bool: True if switched successfully, False if no more endpoints available
         """
         if not self.fallback_urls:
-            self.logger.error("No more fallback URLs available")
+            self.logger.warning("No fallback URLs configured. Using only the primary URL.")
+            # Reset to the primary URL
+            self.base_url = config.PRIMARY_BASE_URL
             return False
 
         # Get the next fallback URL
@@ -539,16 +541,53 @@ class BinanceClient:
         Returns:
             List of open positions
         """
-        account_info = self.get_account_info()
-        positions = account_info['positions']
+        try:
+            # Get account info with a longer recv_window to avoid timestamp issues
+            account_info = self.get_account_info()
 
-        if symbol:
-            positions = [p for p in positions if p['symbol'] == symbol]
+            # Check if we got valid account info
+            if not account_info or 'positions' not in account_info:
+                self.logger.error(f"Invalid account info received: {account_info}")
+                return []
 
-        # Filter out positions with zero amount
-        positions = [p for p in positions if float(p['positionAmt']) != 0]
+            positions = account_info['positions']
 
-        return positions
+            # Log the number of positions before filtering
+            self.logger.info(f"Total positions before filtering: {len(positions)}")
+
+            # Filter by symbol if provided
+            if symbol:
+                positions = [p for p in positions if p['symbol'] == symbol]
+                self.logger.info(f"Positions for {symbol} before filtering zero amounts: {len(positions)}")
+
+            # Filter out positions with zero amount
+            non_zero_positions = [p for p in positions if abs(float(p.get('positionAmt', 0))) > 0]
+
+            # Log the number of non-zero positions
+            self.logger.info(f"Non-zero positions after filtering: {len(non_zero_positions)}")
+
+            # If we have positions but none with non-zero amount, log a warning
+            if positions and not non_zero_positions:
+                self.logger.warning(f"Found {len(positions)} positions but none with non-zero amount")
+                # Log the first few positions for debugging
+                for i, pos in enumerate(positions[:3]):
+                    self.logger.warning(f"Position {i+1}: {pos}")
+
+            # Add mark price to each position for easier PnL calculation
+            for pos in non_zero_positions:
+                try:
+                    pos_symbol = pos['symbol']
+                    pos['markPrice'] = self.get_current_price(pos_symbol)
+                except Exception as e:
+                    self.logger.error(f"Error getting mark price for {pos.get('symbol', 'unknown')}: {str(e)}")
+                    pos['markPrice'] = float(pos.get('entryPrice', 0))
+
+            return non_zero_positions
+
+        except Exception as e:
+            self.logger.error(f"Error in get_open_positions: {str(e)}")
+            # Return empty list in case of error
+            return []
 
     def get_position_pnl(self, symbol=None, position_side=None):
         """
@@ -559,65 +598,120 @@ class BinanceClient:
             position_side: 'LONG' or 'SHORT' (optional)
 
         Returns:
-            Dictionary with PnL information
+            Dictionary with PnL information or list of dictionaries if position_side is None
         """
-        symbol = symbol or self.symbol
-        positions = self.get_open_positions(symbol)
+        try:
+            symbol = symbol or self.symbol
+            positions = self.get_open_positions(symbol)
 
-        if position_side:
-            positions = [p for p in positions if p['positionSide'] == position_side]
+            # Log the number of positions found
+            self.logger.info(f"Found {len(positions)} positions for {symbol}")
 
-        if not positions:
-            return {
-                'symbol': symbol,
-                'position_side': position_side,
-                'entry_price': 0,
-                'mark_price': 0,
-                'position_amt': 0,
-                'unrealized_pnl': 0,
-                'unrealized_pnl_percent': 0,
-                'leverage': 0,
-                'margin_type': 'NONE'
-            }
+            # Filter by position side if provided
+            if position_side:
+                # Handle both hedge mode and one-way mode
+                if position_side == 'LONG':
+                    # In one-way mode, positive positionAmt means LONG
+                    positions = [p for p in positions if p.get('positionSide') == 'LONG' or
+                                (p.get('positionSide') == 'BOTH' and float(p.get('positionAmt', 0)) > 0)]
+                elif position_side == 'SHORT':
+                    # In one-way mode, negative positionAmt means SHORT
+                    positions = [p for p in positions if p.get('positionSide') == 'SHORT' or
+                                (p.get('positionSide') == 'BOTH' and float(p.get('positionAmt', 0)) < 0)]
 
-        # Get current price
-        current_price = self.get_current_price(symbol)
+                self.logger.info(f"After filtering by position_side={position_side}, found {len(positions)} positions")
 
-        # Calculate PnL for each position
-        pnl_info = []
-        for position in positions:
-            entry_price = float(position['entryPrice'])
-            position_amt = float(position['positionAmt'])
-            leverage = int(position['leverage'])
-            margin_type = position['marginType']
-            position_side = position['positionSide']
+            if not positions:
+                return {
+                    'symbol': symbol,
+                    'position_side': position_side,
+                    'entry_price': 0,
+                    'mark_price': 0,
+                    'position_amt': 0,
+                    'unrealized_pnl': 0,
+                    'unrealized_pnl_percent': 0,
+                    'leverage': 0,
+                    'margin_type': 'NONE'
+                }
 
-            # Calculate unrealized PnL
-            if position_side == 'LONG':
-                unrealized_pnl = (current_price - entry_price) * abs(position_amt)
-                unrealized_pnl_percent = ((current_price / entry_price) - 1) * 100 * leverage
-            else:  # SHORT
-                unrealized_pnl = (entry_price - current_price) * abs(position_amt)
-                unrealized_pnl_percent = ((entry_price / current_price) - 1) * 100 * leverage
+            # Calculate PnL for each position
+            pnl_info = []
+            for position in positions:
+                try:
+                    entry_price = float(position.get('entryPrice', 0))
+                    position_amt = float(position.get('positionAmt', 0))
+                    leverage = int(position.get('leverage', 1))
+                    margin_type = position.get('marginType', 'cross')
+                    pos_side = position.get('positionSide', 'BOTH')
 
-            pnl_info.append({
-                'symbol': symbol,
-                'position_side': position_side,
-                'entry_price': entry_price,
-                'mark_price': current_price,
-                'position_amt': position_amt,
-                'unrealized_pnl': unrealized_pnl,
-                'unrealized_pnl_percent': unrealized_pnl_percent,
-                'leverage': leverage,
-                'margin_type': margin_type
-            })
+                    # Use mark price from position if available, otherwise get current price
+                    if 'markPrice' in position:
+                        current_price = float(position['markPrice'])
+                    else:
+                        current_price = self.get_current_price(position.get('symbol', symbol))
 
-        # If position_side was specified, return the first matching position
-        if position_side and pnl_info:
-            return pnl_info[0]
+                    # Determine if LONG or SHORT based on position amount and side
+                    is_long = (pos_side == 'LONG' or (pos_side == 'BOTH' and position_amt > 0))
 
-        # Otherwise, return all positions
-        return pnl_info
+                    # Calculate unrealized PnL
+                    if is_long:
+                        unrealized_pnl = (current_price - entry_price) * abs(position_amt)
+                        if entry_price > 0:
+                            unrealized_pnl_percent = ((current_price / entry_price) - 1) * 100 * leverage
+                        else:
+                            unrealized_pnl_percent = 0
+                    else:  # SHORT
+                        unrealized_pnl = (entry_price - current_price) * abs(position_amt)
+                        if entry_price > 0 and current_price > 0:
+                            unrealized_pnl_percent = ((entry_price / current_price) - 1) * 100 * leverage
+                        else:
+                            unrealized_pnl_percent = 0
+
+                    # Log PnL calculation details
+                    self.logger.debug(
+                        f"PnL calculation for {position.get('symbol', symbol)} {pos_side}: "
+                        f"entry={entry_price:.6f}, mark={current_price:.6f}, "
+                        f"amt={position_amt:.6f}, pnl={unrealized_pnl:.2f} ({unrealized_pnl_percent:.2f}%)"
+                    )
+
+                    pnl_info.append({
+                        'symbol': position.get('symbol', symbol),
+                        'position_side': pos_side,
+                        'entry_price': entry_price,
+                        'mark_price': current_price,
+                        'position_amt': position_amt,
+                        'unrealized_pnl': unrealized_pnl,
+                        'unrealized_pnl_percent': unrealized_pnl_percent,
+                        'leverage': leverage,
+                        'margin_type': margin_type
+                    })
+                except Exception as e:
+                    self.logger.error(f"Error calculating PnL for position {position}: {str(e)}")
+
+            # If position_side was specified, return the first matching position
+            if position_side and pnl_info:
+                return pnl_info[0]
+
+            # Otherwise, return all positions
+            return pnl_info
+
+        except Exception as e:
+            self.logger.error(f"Error in get_position_pnl: {str(e)}")
+            # Return empty dict or list depending on whether position_side was specified
+            if position_side:
+                return {
+                    'symbol': symbol,
+                    'position_side': position_side,
+                    'entry_price': 0,
+                    'mark_price': 0,
+                    'position_amt': 0,
+                    'unrealized_pnl': 0,
+                    'unrealized_pnl_percent': 0,
+                    'leverage': 0,
+                    'margin_type': 'NONE'
+                }
+            else:
+                return []
 
     def get_combined_position_pnl(self, symbol=None):
         """
@@ -629,57 +723,102 @@ class BinanceClient:
         Returns:
             Dictionary with combined PnL information
         """
-        symbol = symbol or self.symbol
-        long_pnl = self.get_position_pnl(symbol, 'LONG')
-        short_pnl = self.get_position_pnl(symbol, 'SHORT')
+        try:
+            symbol = symbol or self.symbol
 
-        # If we have both positions
-        if isinstance(long_pnl, dict) and isinstance(short_pnl, dict) and long_pnl['position_amt'] != 0 and short_pnl['position_amt'] != 0:
-            # Calculate combined PnL
-            combined_unrealized_pnl = long_pnl['unrealized_pnl'] + short_pnl['unrealized_pnl']
+            # Get all positions for the symbol first
+            all_positions = self.get_open_positions(symbol)
+            self.logger.info(f"Found {len(all_positions)} total positions for {symbol}")
 
-            # Calculate weighted average entry prices
-            long_value = abs(long_pnl['position_amt'] * long_pnl['entry_price'])
-            short_value = abs(short_pnl['position_amt'] * short_pnl['entry_price'])
-            total_value = long_value + short_value
+            # Get PnL for LONG and SHORT positions
+            long_pnl = self.get_position_pnl(symbol, 'LONG')
+            short_pnl = self.get_position_pnl(symbol, 'SHORT')
 
-            # Calculate combined PnL percentage
-            if total_value > 0:
-                combined_unrealized_pnl_percent = (combined_unrealized_pnl / total_value) * 100
+            # Log what we found
+            if isinstance(long_pnl, dict):
+                self.logger.info(f"LONG position for {symbol}: amt={long_pnl.get('position_amt', 0)}, pnl={long_pnl.get('unrealized_pnl', 0):.2f}")
             else:
-                combined_unrealized_pnl_percent = 0
+                self.logger.info(f"No LONG position found for {symbol}")
 
-            return {
-                'symbol': symbol,
-                'long_position': long_pnl,
-                'short_position': short_pnl,
-                'combined_unrealized_pnl': combined_unrealized_pnl,
-                'combined_unrealized_pnl_percent': combined_unrealized_pnl_percent,
-                'is_hedged': True
-            }
+            if isinstance(short_pnl, dict):
+                self.logger.info(f"SHORT position for {symbol}: amt={short_pnl.get('position_amt', 0)}, pnl={short_pnl.get('unrealized_pnl', 0):.2f}")
+            else:
+                self.logger.info(f"No SHORT position found for {symbol}")
 
-        # If we only have one position
-        elif isinstance(long_pnl, dict) and long_pnl['position_amt'] != 0:
-            return {
-                'symbol': symbol,
-                'long_position': long_pnl,
-                'short_position': None,
-                'combined_unrealized_pnl': long_pnl['unrealized_pnl'],
-                'combined_unrealized_pnl_percent': long_pnl['unrealized_pnl_percent'],
-                'is_hedged': False
-            }
-        elif isinstance(short_pnl, dict) and short_pnl['position_amt'] != 0:
-            return {
-                'symbol': symbol,
-                'long_position': None,
-                'short_position': short_pnl,
-                'combined_unrealized_pnl': short_pnl['unrealized_pnl'],
-                'combined_unrealized_pnl_percent': short_pnl['unrealized_pnl_percent'],
-                'is_hedged': False
-            }
+            # Check if we have both LONG and SHORT positions
+            has_long = isinstance(long_pnl, dict) and abs(float(long_pnl.get('position_amt', 0))) > 0
+            has_short = isinstance(short_pnl, dict) and abs(float(short_pnl.get('position_amt', 0))) > 0
 
-        # If we have no positions
-        else:
+            # If we have both positions
+            if has_long and has_short:
+                # Calculate combined PnL
+                combined_unrealized_pnl = long_pnl['unrealized_pnl'] + short_pnl['unrealized_pnl']
+
+                # Calculate weighted average entry prices
+                long_value = abs(float(long_pnl['position_amt'])) * float(long_pnl['entry_price'])
+                short_value = abs(float(short_pnl['position_amt'])) * float(short_pnl['entry_price'])
+                total_value = long_value + short_value
+
+                # Calculate combined PnL percentage
+                if total_value > 0:
+                    combined_unrealized_pnl_percent = (combined_unrealized_pnl / total_value) * 100
+                else:
+                    combined_unrealized_pnl_percent = 0
+
+                self.logger.info(f"Combined PnL for {symbol}: {combined_unrealized_pnl:.2f} ({combined_unrealized_pnl_percent:.2f}%)")
+
+                return {
+                    'symbol': symbol,
+                    'long_position': long_pnl,
+                    'short_position': short_pnl,
+                    'combined_unrealized_pnl': combined_unrealized_pnl,
+                    'combined_unrealized_pnl_percent': combined_unrealized_pnl_percent,
+                    'is_hedged': True
+                }
+
+            # If we only have a LONG position
+            elif has_long:
+                self.logger.info(f"Only LONG position for {symbol}: {long_pnl['unrealized_pnl']:.2f} ({long_pnl['unrealized_pnl_percent']:.2f}%)")
+
+                return {
+                    'symbol': symbol,
+                    'long_position': long_pnl,
+                    'short_position': None,
+                    'combined_unrealized_pnl': long_pnl['unrealized_pnl'],
+                    'combined_unrealized_pnl_percent': long_pnl['unrealized_pnl_percent'],
+                    'is_hedged': False
+                }
+
+            # If we only have a SHORT position
+            elif has_short:
+                self.logger.info(f"Only SHORT position for {symbol}: {short_pnl['unrealized_pnl']:.2f} ({short_pnl['unrealized_pnl_percent']:.2f}%)")
+
+                return {
+                    'symbol': symbol,
+                    'long_position': None,
+                    'short_position': short_pnl,
+                    'combined_unrealized_pnl': short_pnl['unrealized_pnl'],
+                    'combined_unrealized_pnl_percent': short_pnl['unrealized_pnl_percent'],
+                    'is_hedged': False
+                }
+
+            # If we have no positions
+            else:
+                self.logger.info(f"No positions found for {symbol}")
+
+                return {
+                    'symbol': symbol,
+                    'long_position': None,
+                    'short_position': None,
+                    'combined_unrealized_pnl': 0,
+                    'combined_unrealized_pnl_percent': 0,
+                    'is_hedged': False
+                }
+
+        except Exception as e:
+            self.logger.error(f"Error in get_combined_position_pnl: {str(e)}")
+
+            # Return default values in case of error
             return {
                 'symbol': symbol,
                 'long_position': None,
@@ -791,46 +930,131 @@ class BinanceClient:
             raise
 
     def place_market_order(self, side, quantity, position_side, symbol=None):
-        """Place a market order"""
+        """
+        Place a market order
+
+        Args:
+            side: 'BUY' or 'SELL'
+            quantity: Order quantity
+            position_side: 'LONG' or 'SHORT' (only used in hedge mode)
+            symbol: Trading symbol (default from config)
+
+        Returns:
+            Response from API
+
+        Raises:
+            Exception: If order quantity is too small or other API errors
+        """
+        symbol = symbol or config.SYMBOL
+
+        # Check if notional value meets minimum requirement (5 USDT)
+        current_price = self.get_current_price(symbol)
+        notional_value = quantity * current_price
+
+        MIN_NOTIONAL_VALUE = 5.0  # 5 USDT minimum
+
+        if notional_value < MIN_NOTIONAL_VALUE:
+            error_msg = f"Order notional value ({notional_value:.2f} USDT) is less than minimum required ({MIN_NOTIONAL_VALUE} USDT)"
+            self.logger.error(error_msg)
+            raise Exception(error_msg)
+
+        # Check current position mode
+        is_hedge_mode = self.get_position_mode()
+
+        # Prepare order parameters
         params = {
-            'symbol': symbol or config.SYMBOL,
+            'symbol': symbol,
             'side': side,  # 'BUY' or 'SELL'
             'type': 'MARKET',
             'quantity': quantity,
-            'positionSide': position_side,  # 'LONG' or 'SHORT'
         }
+
+        # Only include positionSide parameter in hedge mode
+        if is_hedge_mode:
+            params['positionSide'] = position_side  # 'LONG' or 'SHORT'
+            self.logger.info(f"Placing {side} order for {position_side} position with quantity {quantity}")
+        else:
+            self.logger.info(f"Placing {side} order with quantity {quantity} (one-way mode)")
 
         return self._send_request('POST', '/fapi/v1/order', params, signed=True, recv_window=60000)
 
     def place_take_profit_order(self, side, quantity, stop_price, position_side, symbol=None):
-        """Place a take profit market order"""
+        """
+        Place a take profit market order
+
+        Args:
+            side: 'BUY' or 'SELL'
+            quantity: Order quantity
+            stop_price: Stop price to trigger the order
+            position_side: 'LONG' or 'SHORT' (only used in hedge mode)
+            symbol: Trading symbol (default from config)
+
+        Returns:
+            Response from API
+        """
+        symbol = symbol or config.SYMBOL
+
+        # Check current position mode
+        is_hedge_mode = self.get_position_mode()
+
+        # Prepare order parameters
         params = {
-            'symbol': symbol or config.SYMBOL,
+            'symbol': symbol,
             'side': side,  # 'BUY' or 'SELL'
             'type': 'TAKE_PROFIT_MARKET',
             'quantity': quantity,
             'stopPrice': stop_price,
-            'positionSide': position_side,  # 'LONG' or 'SHORT'
             'timeInForce': 'GTC',
             'workingType': 'MARK_PRICE',
             'priceProtect': 'TRUE'
         }
+
+        # Only include positionSide parameter in hedge mode
+        if is_hedge_mode:
+            params['positionSide'] = position_side  # 'LONG' or 'SHORT'
+            self.logger.info(f"Placing {side} take profit order for {position_side} position with quantity {quantity}")
+        else:
+            self.logger.info(f"Placing {side} take profit order with quantity {quantity} (one-way mode)")
 
         return self._send_request('POST', '/fapi/v1/order', params, signed=True, recv_window=60000)
 
     def place_stop_loss_order(self, side, quantity, stop_price, position_side, symbol=None):
-        """Place a stop market order"""
+        """
+        Place a stop market order
+
+        Args:
+            side: 'BUY' or 'SELL'
+            quantity: Order quantity
+            stop_price: Stop price to trigger the order
+            position_side: 'LONG' or 'SHORT' (only used in hedge mode)
+            symbol: Trading symbol (default from config)
+
+        Returns:
+            Response from API
+        """
+        symbol = symbol or config.SYMBOL
+
+        # Check current position mode
+        is_hedge_mode = self.get_position_mode()
+
+        # Prepare order parameters
         params = {
-            'symbol': symbol or config.SYMBOL,
+            'symbol': symbol,
             'side': side,  # 'BUY' or 'SELL'
             'type': 'STOP_MARKET',
             'quantity': quantity,
             'stopPrice': stop_price,
-            'positionSide': position_side,  # 'LONG' or 'SHORT'
             'timeInForce': 'GTC',
             'workingType': 'MARK_PRICE',
             'priceProtect': 'TRUE'
         }
+
+        # Only include positionSide parameter in hedge mode
+        if is_hedge_mode:
+            params['positionSide'] = position_side  # 'LONG' or 'SHORT'
+            self.logger.info(f"Placing {side} stop loss order for {position_side} position with quantity {quantity}")
+        else:
+            self.logger.info(f"Placing {side} stop loss order with quantity {quantity} (one-way mode)")
 
         return self._send_request('POST', '/fapi/v1/order', params, signed=True, recv_window=60000)
 
@@ -842,21 +1066,33 @@ class BinanceClient:
             side: 'BUY' or 'SELL'
             quantity: Order quantity
             price: Limit price
-            position_side: 'LONG' or 'SHORT'
+            position_side: 'LONG' or 'SHORT' (only used in hedge mode)
             symbol: Trading symbol (default from config)
 
         Returns:
             Response from API
         """
+        symbol = symbol or config.SYMBOL
+
+        # Check current position mode
+        is_hedge_mode = self.get_position_mode()
+
+        # Prepare order parameters
         params = {
-            'symbol': symbol or config.SYMBOL,
+            'symbol': symbol,
             'side': side,
             'type': 'LIMIT',
             'quantity': quantity,
             'price': price,
-            'positionSide': position_side,
             'timeInForce': 'GTC'
         }
+
+        # Only include positionSide parameter in hedge mode
+        if is_hedge_mode:
+            params['positionSide'] = position_side  # 'LONG' or 'SHORT'
+            self.logger.info(f"Placing {side} limit order for {position_side} position with quantity {quantity} at price {price}")
+        else:
+            self.logger.info(f"Placing {side} limit order with quantity {quantity} at price {price} (one-way mode)")
 
         return self._send_request('POST', '/fapi/v1/order', params, signed=True, recv_window=60000)
 
@@ -869,23 +1105,35 @@ class BinanceClient:
             quantity: Order quantity
             stop_price: Trigger price
             limit_price: Limit price
-            position_side: 'LONG' or 'SHORT'
+            position_side: 'LONG' or 'SHORT' (only used in hedge mode)
             symbol: Trading symbol (default from config)
 
         Returns:
             Response from API
         """
+        symbol = symbol or config.SYMBOL
+
+        # Check current position mode
+        is_hedge_mode = self.get_position_mode()
+
+        # Prepare order parameters
         params = {
-            'symbol': symbol or config.SYMBOL,
+            'symbol': symbol,
             'side': side,
             'type': 'STOP',
             'quantity': quantity,
             'price': limit_price,
             'stopPrice': stop_price,
-            'positionSide': position_side,
             'timeInForce': 'GTC',
             'workingType': 'MARK_PRICE'
         }
+
+        # Only include positionSide parameter in hedge mode
+        if is_hedge_mode:
+            params['positionSide'] = position_side  # 'LONG' or 'SHORT'
+            self.logger.info(f"Placing {side} stop-limit order for {position_side} position with quantity {quantity}")
+        else:
+            self.logger.info(f"Placing {side} stop-limit order with quantity {quantity} (one-way mode)")
 
         return self._send_request('POST', '/fapi/v1/order', params, signed=True, recv_window=60000)
 
@@ -969,6 +1217,50 @@ class BinanceClient:
         precision = self.get_quantity_precision()
         return round(quantity, precision)
 
+    def calculate_trading_fees(self, quantity, price, is_market_order=True):
+        """
+        Calculate trading fees for a potential order
+
+        Args:
+            quantity: Order quantity
+            price: Order price
+            is_market_order: Whether this is a market order (taker fee) or limit order (maker fee)
+
+        Returns:
+            Dictionary with fee information
+        """
+        try:
+            # Calculate order value
+            order_value = quantity * price
+
+            # Determine fee rate based on order type
+            fee_rate = config.TAKER_FEE_RATE if is_market_order else config.MAKER_FEE_RATE
+
+            # Calculate fee amount
+            fee_amount = order_value * fee_rate
+
+            # Log the calculation
+            self.logger.debug(
+                f"Fee calculation: quantity={quantity}, price={price}, "
+                f"order_value={order_value:.2f}, fee_rate={fee_rate*100:.4f}%, "
+                f"fee_amount={fee_amount:.6f}"
+            )
+
+            return {
+                'order_value': order_value,
+                'fee_rate': fee_rate,
+                'fee_amount': fee_amount
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error calculating trading fees: {str(e)}")
+            # Return default values in case of error
+            return {
+                'order_value': quantity * price,
+                'fee_rate': config.TAKER_FEE_RATE if is_market_order else config.MAKER_FEE_RATE,
+                'fee_amount': quantity * price * (config.TAKER_FEE_RATE if is_market_order else config.MAKER_FEE_RATE)
+            }
+
     def get_income_history(self, income_type=None, start_time=None, end_time=None, limit=1000):
         """
         Get income history (realized PnL, funding fees, etc.)
@@ -1040,10 +1332,35 @@ class BinanceClient:
                 # Get income history for the day
                 income_history = self.get_income_history(start_time=start_of_day, end_time=current_time)
 
+                # Define deposit-related income types to skip
+                DEPOSIT_INCOME_TYPES = [
+                    'TRANSFER',
+                    'INTERNAL_TRANSFER',
+                    'CROSS_COLLATERAL_TRANSFER',
+                    'WELCOME_BONUS',
+                    'DEPOSIT',
+                    'WITHDRAW',
+                    'COIN_SWAP_DEPOSIT',
+                    'COIN_SWAP_WITHDRAW',
+                    'AUTO_EXCHANGE',
+                    'DELIVERED_SETTLEMENT',
+                    'STRATEGY_TRANSFER'
+                ]
+
                 # Process income records
                 for record in income_history:
                     amount = float(record['income'])
                     income_type = record['incomeType']
+
+                    # Skip deposit-related income types
+                    if income_type in DEPOSIT_INCOME_TYPES:
+                        self.logger.info(f"Skipping {income_type} record: {amount} {record['asset']} (not counted as PnL)")
+                        continue
+
+                    # Skip unusually large amounts that might be deposits
+                    if abs(amount) > total_wallet_balance * 0.5:  # If amount is more than 50% of current balance
+                        self.logger.warning(f"Skipping unusually large amount: {amount} {record['asset']} (likely a deposit/withdrawal)")
+                        continue
 
                     # Add to total PnL
                     pnl_summary['total_pnl'] += amount
@@ -1076,7 +1393,46 @@ class BinanceClient:
 
             # Calculate PnL percentage based on account balance
             if total_wallet_balance > 0:
-                pnl_summary['pnl_percentage'] = (pnl_summary['total_pnl'] / total_wallet_balance) * 100
+                # Get the starting balance (current balance minus profit)
+                starting_balance = total_wallet_balance - pnl_summary['total_pnl']
+                if starting_balance <= 0:
+                    # Fallback if calculation doesn't make sense
+                    starting_balance = total_wallet_balance
+
+                # Calculate the PnL percentage based on starting balance
+                try:
+                    pnl_percentage = (pnl_summary['total_pnl'] / starting_balance) * 100
+
+                    # Add sanity check for unreasonable values
+                    if pnl_percentage > 1000:  # Cap at 1000% (10x) as a reasonable maximum
+                        self.logger.warning(
+                            f"Calculated PnL percentage ({pnl_percentage:.2f}%) is unreasonably high. "
+                            f"Capping to 100%. PnL: {pnl_summary['total_pnl']:.2f}, "
+                            f"Starting balance: {starting_balance:.2f}"
+                        )
+                        pnl_percentage = 100.0
+
+                    # Additional check for unreasonably high PnL compared to balance
+                    if abs(pnl_summary['total_pnl']) > total_wallet_balance * 0.5 and pnl_summary['trades_count'] == 0:
+                        self.logger.warning(
+                            f"PnL ({pnl_summary['total_pnl']:.2f}) is unusually high compared to balance ({total_wallet_balance:.2f}) "
+                            f"with no trades. This might be due to deposits/withdrawals. Setting PnL to 0."
+                        )
+                        pnl_percentage = 0.0
+
+                    # Log the calculation details for debugging
+                    self.logger.debug(
+                        f"PnL calculation: total_pnl={pnl_summary['total_pnl']:.2f}, "
+                        f"current_balance={total_wallet_balance:.2f}, "
+                        f"starting_balance={starting_balance:.2f}, "
+                        f"pnl_percentage={pnl_percentage:.2f}%"
+                    )
+
+                    pnl_summary['pnl_percentage'] = pnl_percentage
+                except Exception as e:
+                    self.logger.error(f"Error calculating PnL percentage: {str(e)}")
+                    # Set a default value
+                    pnl_summary['pnl_percentage'] = 0.0
 
             return pnl_summary
 
