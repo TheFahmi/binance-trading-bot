@@ -7,3 +7,5 @@ python-dotenv==1.0.0
 flask==2.2.3
 flask-cors==3.0.10
 psutil==5.9.5
+matplotlib==3.7.1
+tqdm==4.65.0

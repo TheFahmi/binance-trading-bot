@@ -2,11 +2,9 @@ import time
 import hmac
 import hashlib
 import requests
-import json
 from urllib.parse import urlencode
 import pandas as pd
 import config
-from functools import lru_cache
 from datetime import datetime, timedelta
 
 class BinanceClient:
@@ -117,6 +115,7 @@ class BinanceClient:
         Returns:
             Response from API
         """
+        # Use the logger instance instead of importing logging
         hedge_mode = hedge_mode if hedge_mode is not None else config.HEDGE_MODE
 
         params = {
@@ -124,15 +123,24 @@ class BinanceClient:
         }
 
         try:
+            # First check if we need to change the position mode
+            current_mode = self.get_position_mode()
+            if current_mode == hedge_mode:
+                self.logger.info(f"Position mode already set to {'hedge' if hedge_mode else 'one-way'}")
+                return {"msg": "No need to change position side"}
+
+            # If we need to change, make the API call
             return self._send_request('POST', '/fapi/v1/positionSide/dual', params, signed=True, recv_window=60000)
         except Exception as e:
-            import logging
             # If the mode is already set, ignore the error
             if "No need to change position side" in str(e):
-                logging.info(f"Position mode already set to {'hedge' if hedge_mode else 'one-way'}")
+                self.logger.info(f"Position mode already set to {'hedge' if hedge_mode else 'one-way'}")
                 return {"msg": "No need to change position side"}
             else:
-                logging.error(f"Failed to set position mode: {str(e)}")
+                error_msg = f"Failed to set position mode: {str(e)}"
+                self.logger.error(error_msg)
+                # Add a small delay before raising the exception
+                time.sleep(1)  # Using the time module imported at the top of the file
                 raise
 
     def get_position_mode(self):
@@ -146,8 +154,10 @@ class BinanceClient:
             response = self._send_request('GET', '/fapi/v1/positionSide/dual', signed=True, recv_window=60000)
             return response.get('dualSidePosition', False)
         except Exception as e:
-            import logging
-            logging.error(f"Failed to get position mode: {str(e)}")
+            error_msg = f"Failed to get position mode: {str(e)}"
+            self.logger.error(error_msg)
+            # Add a small delay before returning the default value
+            time.sleep(1)  # Using the time module imported at the top of the file
             # Default to config value if we can't get the current mode
             return config.HEDGE_MODE
 
@@ -273,13 +283,11 @@ class BinanceClient:
                             wait_time = (2 ** attempt) + 5  # Increased base wait time
 
                         self.logger.warning(f"Rate limit exceeded. Waiting {wait_time} seconds before retry.")
-                        import time
                         time.sleep(wait_time)
                         continue
                     elif response.status_code >= 500:  # Server error
                         wait_time = (2 ** attempt) + 1
                         self.logger.warning(f"Server error (status {response.status_code}). Waiting {wait_time} seconds before retry.")
-                        import time
                         time.sleep(wait_time)
                         continue
                     else:
@@ -314,7 +322,6 @@ class BinanceClient:
                     if attempt < retry_count - 1:
                         wait_time = (2 ** attempt) + 1
                         self.logger.warning(f"Connection error: {str(e)}. Retrying in {wait_time} seconds... (Attempt {attempt+1}/{retry_count})")
-                        import time
                         time.sleep(wait_time)
                         continue
                     else:
@@ -716,8 +723,9 @@ class BinanceClient:
             return []
 
         except Exception as e:
-            import logging
-            logging.error(f"Error getting leverage brackets for {symbol}: {str(e)}")
+            error_msg = f"Error getting leverage brackets for {symbol}: {str(e)}"
+            self.logger.error(error_msg)
+            # Return empty list without delay
             return []
 
     def get_max_leverage(self, symbol=None):
@@ -758,8 +766,7 @@ class BinanceClient:
 
         # If requested leverage is higher than maximum, use maximum
         if leverage > max_leverage:
-            import logging
-            logging.warning(f"Requested leverage {leverage}x exceeds maximum allowed {max_leverage}x for {symbol}. Using {max_leverage}x instead.")
+            self.logger.warning(f"Requested leverage {leverage}x exceeds maximum allowed {max_leverage}x for {symbol}. Using {max_leverage}x instead.")
             leverage = max_leverage
 
         params = {
@@ -770,14 +777,14 @@ class BinanceClient:
         try:
             return self._send_request('POST', '/fapi/v1/leverage', params, signed=True, recv_window=60000)
         except Exception as e:
-            import logging
             error_msg = f"Failed to set leverage for {symbol}: {str(e)}"
-            logging.error(error_msg)
+            self.logger.error(error_msg)
 
             # If we get an invalid leverage error, try with a lower leverage
             if "is not valid" in str(e) and leverage > 1:
                 new_leverage = max(1, leverage // 2)  # Try with half the leverage, minimum 1x
-                logging.info(f"Retrying with lower leverage {new_leverage}x for {symbol}")
+                self.logger.info(f"Retrying with lower leverage {new_leverage}x for {symbol}")
+                # No delay needed
                 return self.set_leverage(new_leverage, symbol)
 
             # Re-raise the exception if we can't handle it
@@ -1065,8 +1072,7 @@ class BinanceClient:
                     pnl_summary['win_rate'] = (pnl_summary['winning_trades'] / pnl_summary['trades_count']) * 100
 
             except Exception as e:
-                import logging
-                logging.warning(f"Failed to get income history: {str(e)}. Using default PnL values.")
+                self.logger.warning(f"Failed to get income history: {str(e)}. Using default PnL values.")
 
             # Calculate PnL percentage based on account balance
             if total_wallet_balance > 0:
@@ -1075,8 +1081,7 @@ class BinanceClient:
             return pnl_summary
 
         except Exception as e:
-            import logging
-            logging.error(f"Error in get_daily_pnl: {str(e)}")
+            self.logger.error(f"Error in get_daily_pnl: {str(e)}")
 
             # Return default PnL summary if everything fails
             return {

@@ -1,0 +1,17 @@
+{
+    "symbol": "SOLUSDT",
+    "start_date": "2023-01-01",
+    "end_date": "2023-02-01",
+    "initial_balance": 10000.0,
+    "final_balance": 10272.157190411586,
+    "total_trades": 12,
+    "winning_trades": 7,
+    "losing_trades": 5,
+    "win_rate": 0.5833333333333334,
+    "profit_factor": 2.79917741609473,
+    "max_drawdown": 59.909999999998035,
+    "max_drawdown_pct": 0.005990999999999804,
+    "total_profit": 272.15719041158627,
+    "total_profit_pct": 2.7215719041158626,
+    "sharpe_ratio": 0.5070925528371223
+}

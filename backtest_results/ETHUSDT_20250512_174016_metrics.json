@@ -1,0 +1,17 @@
+{
+    "symbol": "ETHUSDT",
+    "start_date": "2022-01-01",
+    "end_date": "2022-03-01",
+    "initial_balance": 10000.0,
+    "final_balance": 34013.84135903401,
+    "total_trades": 778,
+    "winning_trades": 396,
+    "losing_trades": 382,
+    "win_rate": 0.5089974293059126,
+    "profit_factor": 2.1361550405253302,
+    "max_drawdown": 711.7002149547407,
+    "max_drawdown_pct": 0.035437891887723214,
+    "total_profit": 24013.841359034013,
+    "total_profit_pct": 240.13841359034012,
+    "sharpe_ratio": 0.3524491591224036
+}

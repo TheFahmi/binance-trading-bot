@@ -23,6 +23,11 @@ class TestBinanceClient(unittest.TestCase):
         self.mock_config.BASE_URL = 'https://testnet.binance.com'
         self.mock_config.SYMBOL = 'BTCUSDT'
         self.mock_config.RECV_WINDOW = 5000
+        self.mock_config.API_RETRY_COUNT = 3
+        self.mock_config.API_TIMEOUT = 30
+        self.mock_config.API_CONNECT_TIMEOUT = 10
+        self.mock_config.USE_PROXY = False
+        self.mock_config.PROXY_URL = None
 
         # Create a mock for the requests module
         self.requests_patcher = patch('binance_client.requests')
@@ -87,12 +92,12 @@ class TestBinanceClient(unittest.TestCase):
         self.assertEqual(result, {'price': '50000.00'})
 
         # Verify the last request was made correctly
-        self.mock_requests.request.assert_called_with(
-            method='GET',
-            url='https://testnet.binance.com/api/v3/ticker/price',
-            headers={'X-MBX-APIKEY': 'test_api_key'},
-            params={'symbol': 'BTCUSDT'}
-        )
+        args, kwargs = self.mock_requests.request.call_args
+        self.assertEqual(kwargs['method'], 'GET')
+        self.assertEqual(kwargs['url'], 'https://testnet.binance.com/api/v3/ticker/price')
+        self.assertEqual(kwargs['headers'], {'X-MBX-APIKEY': 'test_api_key'})
+        self.assertEqual(kwargs['params'], {'symbol': 'BTCUSDT'})
+        self.assertEqual(kwargs['timeout'], (self.mock_config.API_CONNECT_TIMEOUT, self.mock_config.API_TIMEOUT))
 
     def test_send_request_signed(self):
         """Test _send_request method for signed requests"""
@@ -180,13 +185,15 @@ class TestBinanceClient(unittest.TestCase):
         self.assertEqual(result, {'dualSidePosition': True})
 
         # Verify the request was made correctly
-        self.mock_requests.request.assert_called_with(
-            method='POST',
-            url='https://testnet.binance.com/fapi/v1/positionSide/dual',
-            headers={'X-MBX-APIKEY': 'test_api_key'},
-            params={'dualSidePosition': 'true', 'timestamp': self.mock_requests.request.call_args[1]['params']['timestamp'],
-                   'recvWindow': 60000, 'signature': self.mock_requests.request.call_args[1]['params']['signature']}
-        )
+        args, kwargs = self.mock_requests.request.call_args
+        self.assertEqual(kwargs['method'], 'POST')
+        self.assertEqual(kwargs['url'], 'https://testnet.binance.com/fapi/v1/positionSide/dual')
+        self.assertEqual(kwargs['headers'], {'X-MBX-APIKEY': 'test_api_key'})
+        self.assertEqual(kwargs['params']['dualSidePosition'], 'true')
+        self.assertIn('timestamp', kwargs['params'])
+        self.assertEqual(kwargs['params']['recvWindow'], 60000)
+        self.assertIn('signature', kwargs['params'])
+        self.assertEqual(kwargs['timeout'], (self.mock_config.API_CONNECT_TIMEOUT, self.mock_config.API_TIMEOUT))
 
     def test_set_position_mode_one_way(self):
         """Test set_position_mode method with one-way mode"""
@@ -206,13 +213,15 @@ class TestBinanceClient(unittest.TestCase):
         self.assertEqual(result, {'dualSidePosition': False})
 
         # Verify the request was made correctly
-        self.mock_requests.request.assert_called_with(
-            method='POST',
-            url='https://testnet.binance.com/fapi/v1/positionSide/dual',
-            headers={'X-MBX-APIKEY': 'test_api_key'},
-            params={'dualSidePosition': 'false', 'timestamp': self.mock_requests.request.call_args[1]['params']['timestamp'],
-                   'recvWindow': 60000, 'signature': self.mock_requests.request.call_args[1]['params']['signature']}
-        )
+        args, kwargs = self.mock_requests.request.call_args
+        self.assertEqual(kwargs['method'], 'POST')
+        self.assertEqual(kwargs['url'], 'https://testnet.binance.com/fapi/v1/positionSide/dual')
+        self.assertEqual(kwargs['headers'], {'X-MBX-APIKEY': 'test_api_key'})
+        self.assertEqual(kwargs['params']['dualSidePosition'], 'false')
+        self.assertIn('timestamp', kwargs['params'])
+        self.assertEqual(kwargs['params']['recvWindow'], 60000)
+        self.assertIn('signature', kwargs['params'])
+        self.assertEqual(kwargs['timeout'], (self.mock_config.API_CONNECT_TIMEOUT, self.mock_config.API_TIMEOUT))
 
     def test_get_position_mode(self):
         """Test get_position_mode method"""
@@ -232,13 +241,14 @@ class TestBinanceClient(unittest.TestCase):
         self.assertTrue(result)
 
         # Verify the request was made correctly
-        self.mock_requests.request.assert_called_with(
-            method='GET',
-            url='https://testnet.binance.com/fapi/v1/positionSide/dual',
-            headers={'X-MBX-APIKEY': 'test_api_key'},
-            params={'timestamp': self.mock_requests.request.call_args[1]['params']['timestamp'],
-                   'recvWindow': 60000, 'signature': self.mock_requests.request.call_args[1]['params']['signature']}
-        )
+        args, kwargs = self.mock_requests.request.call_args
+        self.assertEqual(kwargs['method'], 'GET')
+        self.assertEqual(kwargs['url'], 'https://testnet.binance.com/fapi/v1/positionSide/dual')
+        self.assertEqual(kwargs['headers'], {'X-MBX-APIKEY': 'test_api_key'})
+        self.assertIn('timestamp', kwargs['params'])
+        self.assertEqual(kwargs['params']['recvWindow'], 60000)
+        self.assertIn('signature', kwargs['params'])
+        self.assertEqual(kwargs['timeout'], (self.mock_config.API_CONNECT_TIMEOUT, self.mock_config.API_TIMEOUT))
 
     def test_get_position_pnl_long(self):
         """Test get_position_pnl method for LONG position"""
@@ -360,7 +370,7 @@ class TestBinanceClient(unittest.TestCase):
             'margin_type': 'isolated'
         }
 
-        self.client.get_position_pnl = MagicMock(side_effect=lambda symbol, position_side:
+        self.client.get_position_pnl = MagicMock(side_effect=lambda _symbol, position_side:
                                                 long_pnl if position_side == 'LONG' else short_pnl)
 
         # Call the method
@@ -410,7 +420,7 @@ class TestBinanceClient(unittest.TestCase):
             'margin_type': 'NONE'
         }
 
-        self.client.get_position_pnl = MagicMock(side_effect=lambda symbol, position_side:
+        self.client.get_position_pnl = MagicMock(side_effect=lambda _symbol, position_side:
                                                 long_pnl if position_side == 'LONG' else empty_pnl)
 
         # Call the method

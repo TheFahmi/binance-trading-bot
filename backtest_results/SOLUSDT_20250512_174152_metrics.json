@@ -1,0 +1,17 @@
+{
+    "symbol": "SOLUSDT",
+    "start_date": "2022-01-01",
+    "end_date": "2022-03-01",
+    "initial_balance": 10000.0,
+    "final_balance": 52014.45059525002,
+    "total_trades": 845,
+    "winning_trades": 466,
+    "losing_trades": 379,
+    "win_rate": 0.5514792899408284,
+    "profit_factor": 2.5715584962346583,
+    "max_drawdown": 894.840813829378,
+    "max_drawdown_pct": 0.02959822305108273,
+    "total_profit": 42014.45059525002,
+    "total_profit_pct": 420.14450595250014,
+    "sharpe_ratio": 0.43862291141701465
+}

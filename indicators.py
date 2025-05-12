@@ -120,6 +120,22 @@ def calculate_bollinger_bands(df, period=None, std_dev=None):
     df['bb_breakout_up'] = df['close'] > df['bb_upper']
     df['bb_breakout_down'] = df['close'] < df['bb_lower']
 
+    # Add more sensitive signals - approaching bands
+    df['bb_approaching_upper'] = (df['close'] > df['bb_middle']) & (df['close'] > df['close'].shift(1)) & (df['close'] < df['bb_upper']) & (df['bb_upper'] - df['close'] < df['bb_std'] * 0.5)
+    df['bb_approaching_lower'] = (df['close'] < df['bb_middle']) & (df['close'] < df['close'].shift(1)) & (df['close'] > df['bb_lower']) & (df['close'] - df['bb_lower'] < df['bb_std'] * 0.5)
+
+    # Add squeeze detection (when bands are narrow)
+    df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
+    df['bb_squeeze'] = df['bb_width'] < df['bb_width'].rolling(window=20).mean() * 0.8
+
+    # Add bounce signals (price bouncing off the bands)
+    df['bb_bounce_up'] = (df['low'] <= df['bb_lower']) & (df['close'] > df['bb_lower']) & (df['close'] > df['open'])
+    df['bb_bounce_down'] = (df['high'] >= df['bb_upper']) & (df['close'] < df['bb_upper']) & (df['close'] < df['open'])
+
+    # Add mean reversion signals
+    df['bb_mean_reversion_up'] = (df['close'].shift(1) < df['bb_lower'].shift(1)) & (df['close'] > df['bb_lower'])
+    df['bb_mean_reversion_down'] = (df['close'].shift(1) > df['bb_upper'].shift(1)) & (df['close'] < df['bb_upper'])
+
     # Calculate percentage B (position within the bands)
     df['bb_percent_b'] = (df['close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
 
@@ -311,13 +327,101 @@ def check_entry_signal(df, use_smc=True):
                 short_weight += 1
 
     # Determine final signal based on signal strength and weights
-    # MACD crossing is prioritized, so we require it for entry
+    # Make conditions much more flexible to generate more trading signals
+
+    # Check for MACD signals (high priority)
     macd_cross_up = 'macd_cross_up' in latest and latest['macd_cross_up']
     macd_cross_down = 'macd_cross_down' in latest and latest['macd_cross_down']
+    macd_zero_cross_up = 'macd_zero_cross_up' in latest and latest['macd_zero_cross_up']
+    macd_zero_cross_down = 'macd_zero_cross_down' in latest and latest['macd_zero_cross_down']
 
-    if macd_cross_up and long_signals >= 2 and long_weight > short_weight:
+    # Check for RSI signals
+    rsi_oversold = 'rsi' in latest and latest['rsi'] < config.RSI_OVERSOLD + 5  # Add 5 to make it less strict
+    rsi_overbought = 'rsi' in latest and latest['rsi'] > config.RSI_OVERBOUGHT - 5  # Subtract 5 to make it less strict
+
+    # Check for Bollinger Band signals
+    bb_breakout_up = 'bb_breakout_up' in latest and latest['bb_breakout_up']
+    bb_breakout_down = 'bb_breakout_down' in latest and latest['bb_breakout_down']
+    bb_approaching_upper = 'bb_approaching_upper' in latest and latest['bb_approaching_upper']
+    bb_approaching_lower = 'bb_approaching_lower' in latest and latest['bb_approaching_lower']
+    bb_bounce_up = 'bb_bounce_up' in latest and latest['bb_bounce_up']
+    bb_bounce_down = 'bb_bounce_down' in latest and latest['bb_bounce_down']
+    bb_mean_reversion_up = 'bb_mean_reversion_up' in latest and latest['bb_mean_reversion_up']
+    bb_mean_reversion_down = 'bb_mean_reversion_down' in latest and latest['bb_mean_reversion_down']
+    bb_squeeze = 'bb_squeeze' in latest and latest['bb_squeeze']
+
+    # Check for EMA signals
+    ema_cross_up = 'ema_cross_up' in latest and latest['ema_cross_up']
+    ema_cross_down = 'ema_cross_down' in latest and latest['ema_cross_down']
+
+    # Check for candle patterns
+    green_candle = 'is_green' in latest and latest['is_green']
+    red_candle = 'is_red' in latest and latest['is_red']
+
+    # Define more flexible entry conditions
+
+    # LONG signals (any of these conditions can trigger a LONG entry)
+    long_conditions = [
+        # MACD conditions
+        macd_cross_up,
+        macd_zero_cross_up,
+
+        # RSI conditions with candle confirmation
+        rsi_oversold and green_candle,
+
+        # Bollinger Band conditions
+        bb_breakout_up and green_candle,
+        bb_bounce_up,
+        bb_mean_reversion_up,
+        bb_approaching_lower and green_candle,
+        bb_squeeze and green_candle and (latest['close'] > latest['open']),
+
+        # EMA conditions
+        ema_cross_up,
+
+        # Combined conditions
+        rsi_oversold and ema_cross_up,
+        rsi_oversold and macd_zero_cross_up,
+        bb_bounce_up and rsi_oversold,
+        bb_mean_reversion_up and macd_zero_cross_up,
+
+        # Weight-based condition
+        long_signals >= 1 and long_weight > short_weight and green_candle
+    ]
+
+    # SHORT signals (any of these conditions can trigger a SHORT entry)
+    short_conditions = [
+        # MACD conditions
+        macd_cross_down,
+        macd_zero_cross_down,
+
+        # RSI conditions with candle confirmation
+        rsi_overbought and red_candle,
+
+        # Bollinger Band conditions
+        bb_breakout_down and red_candle,
+        bb_bounce_down,
+        bb_mean_reversion_down,
+        bb_approaching_upper and red_candle,
+        bb_squeeze and red_candle and (latest['close'] < latest['open']),
+
+        # EMA conditions
+        ema_cross_down,
+
+        # Combined conditions
+        rsi_overbought and ema_cross_down,
+        rsi_overbought and macd_zero_cross_down,
+        bb_bounce_down and rsi_overbought,
+        bb_mean_reversion_down and macd_zero_cross_down,
+
+        # Weight-based condition
+        short_signals >= 1 and short_weight > long_weight and red_candle
+    ]
+
+    # Return signal based on conditions
+    if any(long_conditions):
         return 'LONG'
-    elif macd_cross_down and short_signals >= 2 and short_weight > long_weight:
+    elif any(short_conditions):
         return 'SHORT'
     else:
         return None

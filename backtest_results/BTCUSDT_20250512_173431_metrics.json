@@ -1,0 +1,17 @@
+{
+    "symbol": "BTCUSDT",
+    "start_date": "2023-01-01",
+    "end_date": "2023-02-01",
+    "initial_balance": 10000.0,
+    "final_balance": 10272.157190411583,
+    "total_trades": 12,
+    "winning_trades": 7,
+    "losing_trades": 5,
+    "win_rate": 0.5833333333333334,
+    "profit_factor": 2.784232746499952,
+    "max_drawdown": 60.81187863089508,
+    "max_drawdown_pct": 0.00599099999999968,
+    "total_profit": 272.15719041158263,
+    "total_profit_pct": 2.721571904115826,
+    "sharpe_ratio": 0.507092552837119
+}

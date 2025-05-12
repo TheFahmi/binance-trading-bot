@@ -1,0 +1,17 @@
+{
+    "symbol": "ETHUSDT",
+    "start_date": "2023-01-01",
+    "end_date": "2023-02-01",
+    "initial_balance": 10000.0,
+    "final_balance": 9908.934591314519,
+    "total_trades": 18,
+    "winning_trades": 5,
+    "losing_trades": 13,
+    "win_rate": 0.2777777777777778,
+    "profit_factor": 0.7661615890784059,
+    "max_drawdown": 180.24869533124365,
+    "max_drawdown_pct": 0.017865538786457007,
+    "total_profit": -91.06540868548109,
+    "total_profit_pct": -0.9106540868548109,
+    "sharpe_ratio": -0.12403473458919789
+}

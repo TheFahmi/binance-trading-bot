@@ -54,6 +54,7 @@ FVG_ENTRY_THRESHOLD = float(os.getenv('FVG_ENTRY_THRESHOLD', '0.01'))  # Thresho
 # Take profit and stop loss settings
 TAKE_PROFIT_PERCENT = float(os.getenv('TAKE_PROFIT_PERCENT', '0.6'))  # 0.6% take profit
 STOP_LOSS_PERCENT = float(os.getenv('STOP_LOSS_PERCENT', '0.3'))  # 0.3% stop loss
+RISK_PERCENTAGE = float(os.getenv('RISK_PERCENTAGE', '1.0'))  # 1% risk per trade
 
 # Daily PnL settings
 DAILY_PROFIT_TARGET = float(os.getenv('DAILY_PROFIT_TARGET', '10.0'))  # 10% daily profit target
